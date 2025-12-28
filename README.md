@@ -273,7 +273,7 @@ docker exec limitless-server python manage.py create-device --name "My Android P
 
 # Save the output:
 # Device ID: 550e8400-e29b-41d4-a716-446655440000
-# API Key: sk_live_abc123def456ghi789jkl012mno345
+# API Key: sk_live_******
 ```
 
 **Troubleshooting Server Issues:**

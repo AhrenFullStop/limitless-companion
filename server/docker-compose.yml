@@ -1,0 +1,95 @@
+version: '3.8'
+
+services:
+  # ============================================
+  # Main FastAPI Server
+  # ============================================
+  server:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile
+    container_name: limitless-server
+    ports:
+      - "${SERVER_PORT:-8000}:8000"
+    environment:
+      - DATABASE_URL=postgresql://${POSTGRES_USER:-limitless}:${POSTGRES_PASSWORD:-password}@db:5432/${POSTGRES_DB:-limitless_db}
+      - OLLAMA_HOST=http://ollama:11434
+      - OLLAMA_MODEL=${OLLAMA_MODEL:-llama3.1:8b}
+      - EMBEDDING_MODEL=${EMBEDDING_MODEL:-all-MiniLM-L6-v2}
+      - ACTION_DETECTION_CONFIDENCE=${ACTION_DETECTION_CONFIDENCE:-0.7}
+      - TRANSCRIPT_RETENTION_DAYS=${TRANSCRIPT_RETENTION_DAYS:-90}
+      - LOG_LEVEL=${LOG_LEVEL:-INFO}
+      - DEBUG=${DEBUG:-false}
+    volumes:
+      - ./logs:/app/logs
+      - ./data:/app/data
+    depends_on:
+      db:
+        condition: service_healthy
+      ollama:
+        condition: service_completed_successfully
+    restart: ${SERVER_RESTART_POLICY:-unless-stopped}
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/api/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
+  # ============================================
+  # PostgreSQL Database with pgvector
+  # ============================================
+  db:
+    image: pgvector/pgvector:pg16
+    container_name: limitless-db
+    environment:
+      - POSTGRES_USER=${POSTGRES_USER:-limitless}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-password}
+      - POSTGRES_DB=${POSTGRES_DB:-limitless_db}
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+      - ./scripts/init-db.sql:/docker-entrypoint-initdb.d/init-db.sql:ro
+    ports:
+      - "5432:5432"
+    restart: ${DB_RESTART_POLICY:-unless-stopped}
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-limitless} -d ${POSTGRES_DB:-limitless_db}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # ============================================
+  # Ollama for LLM Inference
+  # ============================================
+  ollama:
+    image: ollama/ollama:${OLLAMA_IMAGE_TAG:-latest}
+    container_name: limitless-ollama
+    ports:
+      - "11434:11434"
+    volumes:
+      - ollama-data:/root/.ollama
+    restart: ${OLLAMA_RESTART_POLICY:-unless-stopped}
+    healthcheck:
+      test: ["CMD", "ollama", "list"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 60s
+    # Pull and keep model loaded
+    command: >
+      sh -c "
+        ollama serve &
+        sleep 10 &&
+        ollama pull ${OLLAMA_MODEL:-llama3.1:8b} &&
+        wait
+      "
+
+volumes:
+  postgres-data:
+    driver: local
+  ollama-data:
+    driver: local
+
+networks:
+  default:
+    name: limitless-network

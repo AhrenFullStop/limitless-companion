@@ -1,0 +1,184 @@
+[build-system]
+requires = ["setuptools>=61.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "limitless-companion"
+version = "1.0.0"
+description = "Self-hosted AI memory assistant"
+readme = "README.md"
+license = {text = "MIT"}
+requires-python = ">=3.11"
+authors = [
+    {name = "Limitless Companion Contributors"},
+]
+maintainers = [
+    {name = "Limitless Companion Team"},
+]
+keywords = ["ai", "memory", "assistant", "self-hosted", "privacy"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+]
+
+dependencies = [
+    "fastapi==0.104.1",
+    "uvicorn[standard]==0.24.0",
+    "pydantic==2.5.0",
+    "pydantic-settings==2.1.0",
+    "sqlalchemy==2.0.23",
+    "alembic==1.13.1",
+    "psycopg2-binary==2.9.9",
+    "pgvector==0.2.4",
+    "sentence-transformers==2.2.2",
+    "pyannote.audio==3.0.1",
+    "torch==2.1.1",
+    "numpy==1.24.3",
+    "scipy==1.11.4",
+    "librosa==0.10.1",
+    "soundfile==0.12.1",
+    "ollama==0.2.1",
+    "python-multipart==0.0.6",
+    "python-jose[cryptography]==3.3.0",
+    "passlib[bcrypt]==1.7.4",
+    "bcrypt==4.1.2",
+    "cryptography==41.0.7",
+    "httpx==0.25.2",
+    "aiofiles==23.2.1",
+    "structlog==23.2.0",
+    "rich==13.7.0",
+    "typer==0.9.0",
+    "click==8.1.7",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest==7.4.3",
+    "pytest-asyncio==0.21.1",
+    "pytest-cov==4.1.0",
+    "pytest-mock==3.12.0",
+    "black==23.12.1",
+    "isort==5.13.2",
+    "flake8==6.1.0",
+    "mypy==1.7.1",
+    "pre-commit==3.6.0",
+    "httpx==0.25.2",
+    "faker==20.1.0",
+    "factory-boy==3.3.0",
+    "sqlalchemy-utils==0.41.1",
+    "alembic==1.13.1",
+    "pg8000==1.30.1",
+]
+
+[project.urls]
+Homepage = "https://github.com/limitless-companion/limitless-companion"
+Documentation = "https://github.com/limitless-companion/limitless-companion/tree/main/docs"
+Repository = "https://github.com/limitless-companion/limitless-companion"
+Issues = "https://github.com/limitless-companion/limitless-companion/issues"
+Changelog = "https://github.com/limitless-companion/limitless-companion/blob/main/CHANGELOG.md"
+
+[project.scripts]
+limitless = "app.main:app"
+
+[tool.setuptools]
+packages = ["app"]
+package-dir = {"" = "app"}
+
+[tool.setuptools.package-data]
+app = ["**/*.txt", "**/*.md"]
+
+# Black code formatting
+[tool.black]
+line-length = 88
+target-version = ['py311']
+include = '\.pyi?$'
+extend-exclude = '''
+/(
+  # directories
+  \.eggs
+  | \.git
+  | \.hg
+  | \.mypy_cache
+  | \.tox
+  | \.venv
+  | build
+  | dist
+)/
+'''
+
+# isort import sorting
+[tool.isort]
+profile = "black"
+multi_line_output = 3
+line_length = 88
+known_first_party = ["app"]
+known_third_party = ["fastapi", "sqlalchemy", "pydantic"]
+
+# MyPy type checking
+[tool.mypy]
+python_version = "3.11"
+warn_return_any = true
+warn_unused_configs = true
+disallow_untyped_defs = true
+disallow_incomplete_defs = true
+check_untyped_defs = true
+disallow_untyped_decorators = true
+no_implicit_optional = true
+warn_redundant_casts = true
+warn_unused_ignores = true
+warn_no_return = true
+warn_unreachable = true
+strict_equality = true
+
+[[tool.mypy.overrides]]
+module = [
+    "sentence_transformers.*",
+    "pyannote.*",
+    "librosa.*",
+    "soundfile.*",
+    "ollama.*",
+]
+ignore_missing_imports = true
+
+# Pytest configuration
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+python_classes = ["Test*"]
+python_functions = ["test_*"]
+addopts = [
+    "--strict-markers",
+    "--strict-config",
+    "--cov=app",
+    "--cov-report=term-missing",
+    "--cov-report=html:htmlcov",
+    "--cov-fail-under=80",
+]
+markers = [
+    "unit: Unit tests",
+    "integration: Integration tests",
+    "slow: Slow running tests",
+]
+
+# Coverage configuration
+[tool.coverage.run]
+source = ["app"]
+omit = [
+    "*/tests/*",
+    "*/migrations/*",
+    "*/scripts/*",
+]
+
+[tool.coverage.report]
+exclude_lines = [
+    "pragma: no cover",
+    "def __repr__",
+    "raise AssertionError",
+    "raise NotImplementedError",
+]

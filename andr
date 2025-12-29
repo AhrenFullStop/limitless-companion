@@ -1,0 +1,151 @@
+/**
+ * TranscriptDatabase.kt
+ * 
+ * Room database definition for local transcript storage.
+ * 
+ * This database provides local persistence for transcripts, sessions, and related data.
+ * It enables offline operation and serves as a cache for server data.
+ * 
+ * Key features:
+ * - Local storage of transcripts and sessions
+ * - Offline queue for pending uploads
+ * - Full-text search capabilities
+ * - Automatic migration support
+ * 
+ * Architecture: Data Layer - Local Storage (Clean Architecture)
+ * 
+ * TODO(milestone-1): Implement database migrations
+ * TODO(milestone-1): Add proper indexes for performance
+ * TODO(milestone-2): Implement full-text search with FTS4/FTS5
+ * TODO(milestone-2): Add database encryption
+ * TODO(milestone-3): Implement database backup and restore
+ */
+
+package com.limitless.companion.data.local.database
+
+import android.content.Context
+import androidx.room.Database
+import androidx.room.Room
+import androidx.room.RoomDatabase
+import androidx.room.TypeConverters
+import androidx.sqlite.db.SupportSQLiteDatabase
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.launch
+// import timber.log.Timber
+
+/**
+ * Room database for Limitless Companion app.
+ * 
+ * This is the main database instance that provides access to all DAOs.
+ * It follows the singleton pattern to ensure only one instance exists.
+ */
+@Database(
+    entities = [
+        TranscriptEntity::class,
+        SessionEntity::class,
+        // TODO(milestone-2): Add more entities
+        // SpeakerEntity::class,
+        // ActionEntity::class,
+    ],
+    version = 1,
+    exportSchema = true  // Export schema for version control
+)
+@TypeConverters(DatabaseConverters::class)
+abstract class TranscriptDatabase : RoomDatabase() {
+
+    // ========================================
+    // DAO Access
+    // ========================================
+
+    /**
+     * Provides access to transcript operations.
+     */
+    abstract fun transcriptDao(): TranscriptDao
+
+    /**
+     * Provides access to session operations.
+     */
+    abstract fun sessionDao(): SessionDao
+
+    // TODO(milestone-2): Add more DAOs
+    // abstract fun speakerDao(): SpeakerDao
+    // abstract fun actionDao(): ActionDao
+
+    companion object {
+        /**
+         * Database name.
+         */
+        private const val DATABASE_NAME = "limitless_companion_db"
+
+        /**
+         * Singleton instance.
+         */
+        @Volatile
+        private var INSTANCE: TranscriptDatabase? = null
+
+        /**
+         * Gets the singleton database instance.
+         * 
+         * @param context Application context
+         * @param scope Coroutine scope for database callbacks
+         * @return Database instance
+         */
+        fun getDatabase(
+            context: Context,
+            scope: CoroutineScope? = null
+        ): TranscriptDatabase {
+            return INSTANCE ?: synchronized(this) {
+                val instance = Room.databaseBuilder(
+                    context.applicationContext,
+                    TranscriptDatabase::class.java,
+                    DATABASE_NAME
+                )
+                    .addCallback(DatabaseCallback(scope))
+                    // TODO(milestone-1): Add migrations
+                    // .addMigrations(MIGRATION_1_2, MIGRATION_2_3)
+                    .fallbackToDestructiveMigration()  // TODO: Remove in production
+                    .build()
+
+                INSTANCE = instance
+                instance
+            }
+        }
+
+        /**
+         * Clears the database instance (for testing).
+         */
+        fun clearInstance() {
+            INSTANCE = null
+        }
+    }
+
+    /**
+     * Database callback for initialization.
+     */
+    private class DatabaseCallback(
+        private val scope: CoroutineScope?
+    ) : RoomDatabase.Callback() {
+
+        override fun onCreate(db: SupportSQLiteDatabase) {
+            super.onCreate(db)
+            // Timber.d("Database created")
+
+            // TODO(milestone-1): Add initial data if needed
+            scope?.launch {
+                // populateDatabase()
+            }
+        }
+
+        override fun onOpen(db: SupportSQLiteDatabase) {
+            super.onOpen(db)
+            // Timber.d("Database opened")
+        }
+    }
+
+    // TODO(milestone-1): Add database migrations
+    // val MIGRATION_1_2 = object : Migration(1, 2) {
+    //     override fun migrate(database: SupportSQLiteDatabase) {
+    //         // Migration logic here
+    //     }
+    // }
+}

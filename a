@@ -1,0 +1,233 @@
+/**
+ * LimitlessApi.kt
+ * 
+ * Retrofit API interface for Limitless server communication.
+ * 
+ * This interface defines all HTTP endpoints for communicating with the Limitless
+ * server. It uses Retrofit annotations to define request methods, parameters,
+ * and response types.
+ * 
+ * Architecture: Data Layer - Network API (Clean Architecture)
+ * 
+ * TODO(milestone-1): Implement OkHttp client with proper timeouts and interceptors
+ * TODO(milestone-1): Add authentication interceptor for API key
+ * TODO(milestone-2): Implement retry logic for failed requests
+ * TODO(milestone-2): Add request/response logging
+ * TODO(milestone-3): Implement WebSocket for real-time updates
+ */
+
+package com.limitless.companion.data.remote.api
+
+import com.limitless.companion.data.remote.dto.*
+import retrofit2.Response
+import retrofit2.http.*
+
+/**
+ * Retrofit API interface for Limitless server endpoints.
+ * 
+ * All methods are suspend functions for use with Kotlin coroutines.
+ * Methods return Response<T> for manual handling of HTTP status codes.
+ */
+interface LimitlessApi {
+
+    // ========================================
+    // Transcript Endpoints
+    // ========================================
+
+    /**
+     * Creates a new transcript.
+     * 
+     * POST /api/v1/transcripts
+     * 
+     * @param request Transcript data
+     * @return Response with created transcript
+     */
+    @POST("api/v1/transcripts")
+    suspend fun createTranscript(
+        @Body request: CreateTranscriptRequest
+    ): Response<ApiResponse<TranscriptDto>>
+
+    /**
+     * Gets a transcript by ID.
+     * 
+     * GET /api/v1/transcripts/{id}
+     * 
+     * @param id Transcript ID
+     * @return Response with transcript
+     */
+    @GET("api/v1/transcripts/{id}")
+    suspend fun getTranscript(
+        @Path("id") id: String
+    ): Response<ApiResponse<TranscriptDto>>
+
+    /**
+     * Gets transcripts for a session.
+     * 
+     * GET /api/v1/sessions/{sessionId}/transcripts
+     * 
+     * @param sessionId Session ID
+     * @param limit Maximum results
+     * @param offset Pagination offset
+     * @return Response with list of transcripts
+     */
+    @GET("api/v1/sessions/{sessionId}/transcripts")
+    suspend fun getSessionTranscripts(
+        @Path("sessionId") sessionId: String,
+        @Query("limit") limit: Int = 100,
+        @Query("offset") offset: Int = 0
+    ): Response<ApiResponse<List<TranscriptDto>>>
+
+    /**
+     * Deletes a transcript.
+     * 
+     * DELETE /api/v1/transcripts/{id}
+     * 
+     * @param id Transcript ID
+     * @return Response indicating success
+     */
+    @DELETE("api/v1/transcripts/{id}")
+    suspend fun deleteTranscript(
+        @Path("id") id: String
+    ): Response<ApiResponse<Unit>>
+
+    // ========================================
+    // Session Endpoints
+    // ========================================
+
+    /**
+     * Creates a new session.
+     * 
+     * POST /api/v1/sessions
+     * 
+     * @param request Session data
+     * @return Response with created session
+     */
+    @POST("api/v1/sessions")
+    suspend fun createSession(
+        @Body request: CreateSessionRequest
+    ): Response<ApiResponse<SessionDto>>
+
+    /**
+     * Gets a session by ID.
+     * 
+     * GET /api/v1/sessions/{id}
+     * 
+     * @param id Session ID
+     * @return Response with session
+     */
+    @GET("api/v1/sessions/{id}")
+    suspend fun getSession(
+        @Path("id") id: String
+    ): Response<ApiResponse<SessionDto>>
+
+    /**
+     * Gets all sessions.
+     * 
+     * GET /api/v1/sessions
+     * 
+     * @param limit Maximum results
+     * @param offset Pagination offset
+     * @return Response with list of sessions
+     */
+    @GET("api/v1/sessions")
+    suspend fun getSessions(
+        @Query("limit") limit: Int = 50,
+        @Query("offset") offset: Int = 0
+    ): Response<ApiResponse<List<SessionDto>>>
+
+    /**
+     * Updates a session.
+     * 
+     * PUT /api/v1/sessions/{id}
+     * 
+     * @param id Session ID
+     * @param endTime Session end time
+     * @param durationMs Session duration
+     * @param transcriptCount Transcript count
+     * @return Response with updated session
+     */
+    @PUT("api/v1/sessions/{id}")
+    suspend fun updateSession(
+        @Path("id") id: String,
+        @Query("end_time") endTime: Long,
+        @Query("duration_ms") durationMs: Long,
+        @Query("transcript_count") transcriptCount: Int
+    ): Response<ApiResponse<SessionDto>>
+
+    /**
+     * Deletes a session and all its transcripts.
+     * 
+     * DELETE /api/v1/sessions/{id}
+     * 
+     * @param id Session ID
+     * @return Response indicating success
+     */
+    @DELETE("api/v1/sessions/{id}")
+    suspend fun deleteSession(
+        @Path("id") id: String
+    ): Response<ApiResponse<Unit>>
+
+    // ========================================
+    // Search Endpoints
+    // ========================================
+
+    /**
+     * Searches transcripts.
+     * 
+     * POST /api/v1/search
+     * 
+     * @param request Search parameters
+     * @return Response with search results
+     */
+    @POST("api/v1/search")
+    suspend fun search(
+        @Body request: SearchRequest
+    ): Response<ApiResponse<SearchResponseDto>>
+
+    /**
+     * Quick search with query parameter.
+     * 
+     * GET /api/v1/search
+     * 
+     * @param query Search query
+     * @param limit Maximum results
+     * @return Response with search results
+     */
+    @GET("api/v1/search")
+    suspend fun quickSearch(
+        @Query("q") query: String,
+        @Query("limit") limit: Int = 20
+    ): Response<ApiResponse<SearchResponseDto>>
+
+    // ========================================
+    // Health & Status Endpoints
+    // ========================================
+
+    /**
+     * Health check endpoint.
+     * 
+     * GET /api/v1/health
+     * 
+     * @return Response indicating server health
+     */
+    @GET("api/v1/health")
+    suspend fun healthCheck(): Response<ApiResponse<Map<String, Any>>>
+
+    /**
+     * Gets API version information.
+     * 
+     * GET /api/v1/version
+     * 
+     * @return Response with version info
+     */
+    @GET("api/v1/version")
+    suspend fun getVersion(): Response<ApiResponse<Map<String, String>>>
+
+    // TODO(milestone-3): Add action detection endpoints
+    // @GET("api/v1/actions")
+    // suspend fun getActions(...)
+
+    // TODO(milestone-3): Add speaker diarization endpoints
+    // @GET("api/v1/speakers")
+    // suspend fun getSpeakers(...)
+}

@@ -1,0 +1,406 @@
+/**
+ * RecordingScreen.kt
+ * 
+ * Main recording screen using Jetpack Compose.
+ * 
+ * This screen displays the recording UI, including:
+ * - Recording status and indicators
+ * - Bluetooth connection status
+ * - Real-time transcription preview
+ * - Recording controls (start/stop/pause)
+ * 
+ * Architecture: UI Layer (Clean Architecture)
+ * 
+ * TODO(milestone-1): Implement actual service binding and state management
+ * TODO(milestone-1): Add permission handling
+ * TODO(milestone-2): Add real-time transcription display
+ * TODO(milestone-2): Add waveform visualization
+ * TODO(milestone-3): Add action suggestions UI
+ */
+
+package com.limitless.companion.ui.screens.RecordingScreen
+
+import androidx.compose.foundation.layout.*
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.*
+import androidx.compose.material3.*
+import androidx.compose.runtime.*
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.unit.dp
+import kotlinx.coroutines.delay
+// import timber.log.Timber
+
+/**
+ * Recording screen state.
+ */
+data class RecordingScreenState(
+    val isRecording: Boolean = false,
+    val isPaused: Boolean = false,
+    val isBluetoothConnected: Boolean = false,
+    val bluetoothDeviceName: String? = null,
+    val elapsedTime: Long = 0L,
+    val transcriptPreview: String = "",
+    val errorMessage: String? = null
+)
+
+/**
+ * Main recording screen composable.
+ * 
+ * @param onStartRecording Callback when recording starts
+ * @param onStopRecording Callback when recording stops
+ * @param onPauseRecording Callback when recording pauses
+ * @param onResumeRecording Callback when recording resumes
+ */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun RecordingScreen(
+    onStartRecording: () -> Unit = {},
+    onStopRecording: () -> Unit = {},
+    onPauseRecording: () -> Unit = {},
+    onResumeRecording: () -> Unit = {}
+) {
+    // TODO(milestone-1): Manage state via ViewModel
+    var state by remember { mutableStateOf(RecordingScreenState()) }
+    
+    // Simulated elapsed time counter
+    LaunchedEffect(state.isRecording, state.isPaused) {
+        if (state.isRecording && !state.isPaused) {
+            while (true) {
+                delay(1000)
+                state = state.copy(elapsedTime = state.elapsedTime + 1000)
+            }
+        }
+    }
+    
+    Scaffold(
+        topBar = {
+            TopAppBar(
+                title = { Text("Limitless Companion") },
+                actions = {
+                    // Settings button
+                    IconButton(onClick = { /* TODO: Navigate to settings */ }) {
+                        Icon(Icons.Default.Settings, contentDescription = "Settings")
+                    }
+                }
+            )
+        }
+    ) { paddingValues ->
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(paddingValues)
+                .padding(16.dp),
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.SpaceBetween
+        ) {
+            // Top status section
+            StatusSection(
+                isBluetoothConnected = state.isBluetoothConnected,
+                bluetoothDeviceName = state.bluetoothDeviceName
+            )
+            
+            // Center recording controls
+            RecordingControlsSection(
+                isRecording = state.isRecording,
+                isPaused = state.isPaused,
+                elapsedTime = state.elapsedTime,
+                onStartRecording = {
+                    state = state.copy(isRecording = true, elapsedTime = 0L)
+                    onStartRecording()
+                },
+                onStopRecording = {
+                    state = state.copy(isRecording = false, isPaused = false, elapsedTime = 0L)
+                    onStopRecording()
+                },
+                onPauseRecording = {
+                    state = state.copy(isPaused = true)
+                    onPauseRecording()
+                },
+                onResumeRecording = {
+                    state = state.copy(isPaused = false)
+                    onResumeRecording()
+                }
+            )
+            
+            // Bottom transcription preview
+            TranscriptionPreviewSection(
+                transcriptPreview = state.transcriptPreview,
+                isRecording = state.isRecording
+            )
+            
+            // Error message (if any)
+            state.errorMessage?.let { error ->
+                ErrorSection(errorMessage = error)
+            }
+        }
+    }
+}
+
+/**
+ * Status section showing connection status.
+ */
+@Composable
+fun StatusSection(
+    isBluetoothConnected: Boolean,
+    bluetoothDeviceName: String?
+) {
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        colors = CardDefaults.cardColors(
+            containerColor = if (isBluetoothConnected) 
+                MaterialTheme.colorScheme.primaryContainer 
+            else 
+                MaterialTheme.colorScheme.errorContainer
+        )
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(16.dp),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Icon(
+                imageVector = if (isBluetoothConnected) 
+                    Icons.Default.Bluetooth 
+                else 
+                    Icons.Default.BluetoothDisabled,
+                contentDescription = "Bluetooth Status",
+                tint = if (isBluetoothConnected) 
+                    MaterialTheme.colorScheme.primary 
+                else 
+                    MaterialTheme.colorScheme.error
+            )
+            
+            Column {
+                Text(
+                    text = if (isBluetoothConnected) "Connected" else "Not Connected",
+                    style = MaterialTheme.typography.titleMedium
+                )
+                
+                bluetoothDeviceName?.let { name ->
+                    Text(
+                        text = name,
+                        style = MaterialTheme.typography.bodySmall
+                    )
+                }
+            }
+        }
+    }
+}
+
+/**
+ * Recording controls section.
+ */
+@Composable
+fun RecordingControlsSection(
+    isRecording: Boolean,
+    isPaused: Boolean,
+    elapsedTime: Long,
+    onStartRecording: () -> Unit,
+    onStopRecording: () -> Unit,
+    onPauseRecording: () -> Unit,
+    onResumeRecording: () -> Unit
+) {
+    Column(
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.spacedBy(24.dp)
+    ) {
+        // Elapsed time display
+        Text(
+            text = formatElapsedTime(elapsedTime),
+            style = MaterialTheme.typography.displayLarge,
+            color = if (isRecording && !isPaused) 
+                MaterialTheme.colorScheme.primary 
+            else 
+                MaterialTheme.colorScheme.onSurface
+        )
+        
+        // Recording indicator
+        if (isRecording) {
+            Row(
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Surface(
+                    modifier = Modifier.size(12.dp),
+                    shape = MaterialTheme.shapes.small,
+                    color = if (isPaused) Color.Yellow else Color.Red
+                ) {}
+                
+                Text(
+                    text = if (isPaused) "Paused" else "Recording",
+                    style = MaterialTheme.typography.titleMedium
+                )
+            }
+        }
+        
+        // Control buttons
+        Row(
+            horizontalArrangement = Arrangement.spacedBy(16.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            if (isRecording) {
+                // Pause/Resume button
+                FilledIconButton(
+                    onClick = { if (isPaused) onResumeRecording() else onPauseRecording() },
+                    modifier = Modifier.size(64.dp)
+                ) {
+                    Icon(
+                        imageVector = if (isPaused) Icons.Default.PlayArrow else Icons.Default.Pause,
+                        contentDescription = if (isPaused) "Resume" else "Pause",
+                        modifier = Modifier.size(32.dp)
+                    )
+                }
+                
+                // Stop button
+                FilledTonalIconButton(
+                    onClick = onStopRecording,
+                    modifier = Modifier.size(64.dp),
+                    colors = IconButtonDefaults.filledTonalIconButtonColors(
+                        containerColor = MaterialTheme.colorScheme.errorContainer
+                    )
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.Stop,
+                        contentDescription = "Stop",
+                        modifier = Modifier.size(32.dp)
+                    )
+                }
+            } else {
+                // Start button
+                FilledIconButton(
+                    onClick = onStartRecording,
+                    modifier = Modifier.size(80.dp),
+                    colors = IconButtonDefaults.filledIconButtonColors(
+                        containerColor = MaterialTheme.colorScheme.primary
+                    )
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.Mic,
+                        contentDescription = "Start Recording",
+                        modifier = Modifier.size(40.dp)
+                    )
+                }
+            }
+        }
+        
+        // Instructions
+        Text(
+            text = if (isRecording) 
+                "Tap pause to pause, tap stop to end session" 
+            else 
+                "Tap to start recording",
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            textAlign = TextAlign.Center
+        )
+    }
+}
+
+/**
+ * Transcription preview section.
+ */
+@Composable
+fun TranscriptionPreviewSection(
+    transcriptPreview: String,
+    isRecording: Boolean
+) {
+    Card(
+        modifier = Modifier
+            .fillMaxWidth()
+            .height(200.dp)
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(16.dp)
+        ) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(
+                    text = "Transcription",
+                    style = MaterialTheme.typography.titleMedium
+                )
+                
+                if (isRecording) {
+                    CircularProgressIndicator(
+                        modifier = Modifier.size(16.dp),
+                        strokeWidth = 2.dp
+                    )
+                }
+            }
+            
+            Spacer(modifier = Modifier.height(8.dp))
+            
+            if (transcriptPreview.isNotEmpty()) {
+                Text(
+                    text = transcriptPreview,
+                    style = MaterialTheme.typography.bodyMedium
+                )
+            } else {
+                Text(
+                    text = if (isRecording) 
+                        "Listening..." 
+                    else 
+                        "Transcription will appear here during recording",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+        }
+    }
+}
+
+/**
+ * Error message section.
+ */
+@Composable
+fun ErrorSection(errorMessage: String) {
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        colors = CardDefaults.cardColors(
+            containerColor = MaterialTheme.colorScheme.errorContainer
+        )
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(16.dp),
+            horizontalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            Icon(
+                imageVector = Icons.Default.Error,
+                contentDescription = "Error",
+                tint = MaterialTheme.colorScheme.error
+            )
+            
+            Text(
+                text = errorMessage,
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onErrorContainer
+            )
+        }
+    }
+}
+
+/**
+ * Formats elapsed time in MM:SS format.
+ */
+private fun formatElapsedTime(milliseconds: Long): String {
+    val seconds = (milliseconds / 1000) % 60
+    val minutes = (milliseconds / 1000 / 60) % 60
+    val hours = milliseconds / 1000 / 3600
+    
+    return if (hours > 0) {
+        String.format("%02d:%02d:%02d", hours, minutes, seconds)
+    } else {
+        String.format("%02d:%02d", minutes, seconds)
+    }
+}

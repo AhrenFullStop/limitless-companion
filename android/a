@@ -1,0 +1,507 @@
+/**
+ * TranscriptEntity.kt
+ * 
+ * Room entity definitions for the transcript database.
+ * 
+ * This file contains all entity classes, DAOs (Data Access Objects), and type converters
+ * for the Room database. It follows Clean Architecture principles by keeping the data
+ * layer separate from business logic.
+ * 
+ * Entities:
+ * - TranscriptEntity: Individual transcript segments
+ * - SessionEntity: Recording sessions
+ * 
+ * Architecture: Data Layer - Database Entities (Clean Architecture)
+ * 
+ * TODO(milestone-1): Add indexes for frequently queried fields
+ * TODO(milestone-2): Implement full-text search entity
+ * TODO(milestone-2): Add speaker and action entities
+ * TODO(milestone-3): Add relationship mappings for complex queries
+ */
+
+package com.limitless.companion.data.local.database.entities
+
+import androidx.room.*
+import androidx.room.ForeignKey.Companion.CASCADE
+import kotlinx.coroutines.flow.Flow
+import java.util.Date
+
+// ============================================================================
+// Entities
+// ============================================================================
+
+/**
+ * Database entity representing a transcript segment.
+ * 
+ * @property id Primary key
+ * @property sessionId Foreign key to session
+ * @property text Transcribed text
+ * @property timestamp When the transcript was created
+ * @property startTimeMs Start time in milliseconds (relative to session start)
+ * @property endTimeMs End time in milliseconds (relative to session start)
+ * @property confidence Transcription confidence score (0.0 to 1.0)
+ * @property language Language code
+ * @property speakerId Speaker identifier (null if not identified)
+ * @property isSynced Whether this transcript has been uploaded to server
+ * @property serverId Server-side ID (null if not synced)
+ * @property retryCount Number of sync attempts
+ * @property createdAt Record creation timestamp
+ * @property updatedAt Record last update timestamp
+ */
+@Entity(
+    tableName = "transcripts",
+    foreignKeys = [
+        ForeignKey(
+            entity = SessionEntity::class,
+            parentColumns = ["id"],
+            childColumns = ["session_id"],
+            onDelete = CASCADE
+        )
+    ],
+    indices = [
+        Index(value = ["session_id"]),
+        Index(value = ["timestamp"]),
+        Index(value = ["is_synced"]),
+        Index(value = ["server_id"], unique = true)
+    ]
+)
+data class TranscriptEntity(
+    @PrimaryKey(autoGenerate = true)
+    val id: Long = 0,
+
+    @ColumnInfo(name = "session_id")
+    val sessionId: String,
+
+    @ColumnInfo(name = "text")
+    val text: String,
+
+    @ColumnInfo(name = "timestamp")
+    val timestamp: Long = System.currentTimeMillis(),
+
+    @ColumnInfo(name = "start_time_ms")
+    val startTimeMs: Long = 0,
+
+    @ColumnInfo(name = "end_time_ms")
+    val endTimeMs: Long = 0,
+
+    @ColumnInfo(name = "confidence")
+    val confidence: Float = 0.0f,
+
+    @ColumnInfo(name = "language")
+    val language: String = "en",
+
+    @ColumnInfo(name = "speaker_id")
+    val speakerId: String? = null,
+
+    @ColumnInfo(name = "is_synced")
+    val isSynced: Boolean = false,
+
+    @ColumnInfo(name = "server_id")
+    val serverId: String? = null,
+
+    @ColumnInfo(name = "retry_count")
+    val retryCount: Int = 0,
+
+    @ColumnInfo(name = "created_at")
+    val createdAt: Long = System.currentTimeMillis(),
+
+    @ColumnInfo(name = "updated_at")
+    val updatedAt: Long = System.currentTimeMillis()
+)
+
+/**
+ * Database entity representing a recording session.
+ * 
+ * @property id Primary key (session UUID)
+ * @property startTime Session start timestamp
+ * @property endTime Session end timestamp (null if active)
+ * @property durationMs Total session duration in milliseconds
+ * @property transcriptCount Number of transcript segments
+ * @property deviceInfo Device information
+ * @property bluetoothDeviceName Bluetooth device name
+ * @property isActive Whether session is currently active
+ * @property isSynced Whether session has been uploaded to server
+ * @property serverId Server-side ID (null if not synced)
+ * @property createdAt Record creation timestamp
+ * @property updatedAt Record last update timestamp
+ */
+@Entity(
+    tableName = "sessions",
+    indices = [
+        Index(value = ["start_time"]),
+        Index(value = ["is_active"]),
+        Index(value = ["is_synced"]),
+        Index(value = ["server_id"], unique = true)
+    ]
+)
+data class SessionEntity(
+    @PrimaryKey
+    val id: String,
+
+    @ColumnInfo(name = "start_time")
+    val startTime: Long,
+
+    @ColumnInfo(name = "end_time")
+    val endTime: Long? = null,
+
+    @ColumnInfo(name = "duration_ms")
+    val durationMs: Long = 0,
+
+    @ColumnInfo(name = "transcript_count")
+    val transcriptCount: Int = 0,
+
+    @ColumnInfo(name = "device_info")
+    val deviceInfo: String = "",
+
+    @ColumnInfo(name = "bluetooth_device_name")
+    val bluetoothDeviceName: String? = null,
+
+    @ColumnInfo(name = "is_active")
+    val isActive: Boolean = true,
+
+    @ColumnInfo(name = "is_synced")
+    val isSynced: Boolean = false,
+
+    @ColumnInfo(name = "server_id")
+    val serverId: String? = null,
+
+    @ColumnInfo(name = "created_at")
+    val createdAt: Long = System.currentTimeMillis(),
+
+    @ColumnInfo(name = "updated_at")
+    val updatedAt: Long = System.currentTimeMillis()
+)
+
+// TODO(milestone-2): Add more entities
+// @Entity(tableName = "speakers")
+// data class SpeakerEntity(...)
+//
+// @Entity(tableName = "actions")
+// data class ActionEntity(...)
+
+// ============================================================================
+// Data Access Objects (DAOs)
+// ============================================================================
+
+/**
+ * DAO for transcript operations.
+ */
+@Dao
+interface TranscriptDao {
+
+    /**
+     * Inserts a new transcript.
+     * 
+     * @param transcript Transcript to insert
+     * @return Row ID of inserted transcript
+     */
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun insert(transcript: TranscriptEntity): Long
+
+    /**
+     * Inserts multiple transcripts.
+     * 
+     * @param transcripts Transcripts to insert
+     * @return List of row IDs
+     */
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun insertAll(transcripts: List<TranscriptEntity>): List<Long>
+
+    /**
+     * Updates a transcript.
+     * 
+     * @param transcript Transcript to update
+     */
+    @Update
+    suspend fun update(transcript: TranscriptEntity)
+
+    /**
+     * Deletes a transcript.
+     * 
+     * @param transcript Transcript to delete
+     */
+    @Delete
+    suspend fun delete(transcript: TranscriptEntity)
+
+    /**
+     * Gets a transcript by ID.
+     * 
+     * @param id Transcript ID
+     * @return Transcript or null
+     */
+    @Query("SELECT * FROM transcripts WHERE id = :id")
+    suspend fun getById(id: Long): TranscriptEntity?
+
+    /**
+     * Gets all transcripts for a session.
+     * 
+     * @param sessionId Session ID
+     * @return Flow of transcripts
+     */
+    @Query("SELECT * FROM transcripts WHERE session_id = :sessionId ORDER BY timestamp ASC")
+    fun getBySession(sessionId: String): Flow<List<TranscriptEntity>>
+
+    /**
+     * Gets all unsynced transcripts.
+     * 
+     * @return Flow of unsynced transcripts
+     */
+    @Query("SELECT * FROM transcripts WHERE is_synced = 0 ORDER BY timestamp ASC")
+    fun getUnsynced(): Flow<List<TranscriptEntity>>
+
+    /**
+     * Gets unsynced transcripts that haven't exceeded retry limit.
+     * 
+     * @param maxRetries Maximum retry count
+     * @return List of transcripts
+     */
+    @Query("SELECT * FROM transcripts WHERE is_synced = 0 AND retry_count < :maxRetries ORDER BY timestamp ASC")
+    suspend fun getUnsyncedWithRetries(maxRetries: Int): List<TranscriptEntity>
+
+    /**
+     * Marks a transcript as synced.
+     * 
+     * @param id Transcript ID
+     * @param serverId Server-side ID
+     */
+    @Query("UPDATE transcripts SET is_synced = 1, server_id = :serverId, updated_at = :updatedAt WHERE id = :id")
+    suspend fun markAsSynced(id: Long, serverId: String, updatedAt: Long = System.currentTimeMillis())
+
+    /**
+     * Increments retry count for a transcript.
+     * 
+     * @param id Transcript ID
+     */
+    @Query("UPDATE transcripts SET retry_count = retry_count + 1, updated_at = :updatedAt WHERE id = :id")
+    suspend fun incrementRetryCount(id: Long, updatedAt: Long = System.currentTimeMillis())
+
+    /**
+     * Searches transcripts by text.
+     * 
+     * @param query Search query
+     * @return Flow of matching transcripts
+     * 
+     * TODO(milestone-2): Implement with FTS for better performance
+     */
+    @Query("SELECT * FROM transcripts WHERE text LIKE '%' || :query || '%' ORDER BY timestamp DESC")
+    fun search(query: String): Flow<List<TranscriptEntity>>
+
+    /**
+     * Gets transcripts within a time range.
+     * 
+     * @param startTime Start timestamp
+     * @param endTime End timestamp
+     * @return Flow of transcripts
+     */
+    @Query("SELECT * FROM transcripts WHERE timestamp BETWEEN :startTime AND :endTime ORDER BY timestamp ASC")
+    fun getByTimeRange(startTime: Long, endTime: Long): Flow<List<TranscriptEntity>>
+
+    /**
+     * Deletes all transcripts for a session.
+     * 
+     * @param sessionId Session ID
+     */
+    @Query("DELETE FROM transcripts WHERE session_id = :sessionId")
+    suspend fun deleteBySession(sessionId: String)
+
+    /**
+     * Deletes all synced transcripts older than a timestamp.
+     * 
+     * @param timestamp Cutoff timestamp
+     * @return Number of deleted rows
+     */
+    @Query("DELETE FROM transcripts WHERE is_synced = 1 AND timestamp < :timestamp")
+    suspend fun deleteSyncedOlderThan(timestamp: Long): Int
+
+    /**
+     * Gets total count of transcripts.
+     * 
+     * @return Total count
+     */
+    @Query("SELECT COUNT(*) FROM transcripts")
+    suspend fun getCount(): Int
+
+    /**
+     * Gets count of unsynced transcripts.
+     * 
+     * @return Unsynced count
+     */
+    @Query("SELECT COUNT(*) FROM transcripts WHERE is_synced = 0")
+    suspend fun getUnsyncedCount(): Int
+}
+
+/**
+ * DAO for session operations.
+ */
+@Dao
+interface SessionDao {
+
+    /**
+     * Inserts a new session.
+     * 
+     * @param session Session to insert
+     */
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun insert(session: SessionEntity)
+
+    /**
+     * Updates a session.
+     * 
+     * @param session Session to update
+     */
+    @Update
+    suspend fun update(session: SessionEntity)
+
+    /**
+     * Deletes a session.
+     * 
+     * @param session Session to delete
+     */
+    @Delete
+    suspend fun delete(session: SessionEntity)
+
+    /**
+     * Gets a session by ID.
+     * 
+     * @param id Session ID
+     * @return Session or null
+     */
+    @Query("SELECT * FROM sessions WHERE id = :id")
+    suspend fun getById(id: String): SessionEntity?
+
+    /**
+     * Gets all sessions.
+     * 
+     * @return Flow of all sessions
+     */
+    @Query("SELECT * FROM sessions ORDER BY start_time DESC")
+    fun getAll(): Flow<List<SessionEntity>>
+
+    /**
+     * Gets active session.
+     * 
+     * @return Active session or null
+     */
+    @Query("SELECT * FROM sessions WHERE is_active = 1 LIMIT 1")
+    suspend fun getActive(): SessionEntity?
+
+    /**
+     * Gets all unsynced sessions.
+     * 
+     * @return Flow of unsynced sessions
+     */
+    @Query("SELECT * FROM sessions WHERE is_synced = 0 ORDER BY start_time DESC")
+    fun getUnsynced(): Flow<List<SessionEntity>>
+
+    /**
+     * Marks a session as synced.
+     * 
+     * @param id Session ID
+     * @param serverId Server-side ID
+     */
+    @Query("UPDATE sessions SET is_synced = 1, server_id = :serverId, updated_at = :updatedAt WHERE id = :id")
+    suspend fun markAsSynced(id: String, serverId: String, updatedAt: Long = System.currentTimeMillis())
+
+    /**
+     * Marks a session as inactive.
+     * 
+     * @param id Session ID
+     * @param endTime End timestamp
+     * @param durationMs Duration in milliseconds
+     */
+    @Query("UPDATE sessions SET is_active = 0, end_time = :endTime, duration_ms = :durationMs, updated_at = :updatedAt WHERE id = :id")
+    suspend fun markAsInactive(
+        id: String,
+        endTime: Long,
+        durationMs: Long,
+        updatedAt: Long = System.currentTimeMillis()
+    )
+
+    /**
+     * Updates transcript count for a session.
+     * 
+     * @param id Session ID
+     * @param count New transcript count
+     */
+    @Query("UPDATE sessions SET transcript_count = :count, updated_at = :updatedAt WHERE id = :id")
+    suspend fun updateTranscriptCount(id: String, count: Int, updatedAt: Long = System.currentTimeMillis())
+
+    /**
+     * Deletes sessions older than a timestamp.
+     * 
+     * @param timestamp Cutoff timestamp
+     * @return Number of deleted rows
+     */
+    @Query("DELETE FROM sessions WHERE is_synced = 1 AND start_time < :timestamp")
+    suspend fun deleteSyncedOlderThan(timestamp: Long): Int
+
+    /**
+     * Gets total count of sessions.
+     * 
+     * @return Total count
+     */
+    @Query("SELECT COUNT(*) FROM sessions")
+    suspend fun getCount(): Int
+}
+
+// ============================================================================
+// Type Converters
+// ============================================================================
+
+/**
+ * Type converters for Room database.
+ * 
+ * Room requires type converters for types it doesn't natively support.
+ */
+class DatabaseConverters {
+
+    /**
+     * Converts Date to Long timestamp.
+     */
+    @TypeConverter
+    fun fromDate(date: Date?): Long? {
+        return date?.time
+    }
+
+    /**
+     * Converts Long timestamp to Date.
+     */
+    @TypeConverter
+    fun toDate(timestamp: Long?): Date? {
+        return timestamp?.let { Date(it) }
+    }
+
+    /**
+     * Converts List<String> to comma-separated string.
+     */
+    @TypeConverter
+    fun fromStringList(list: List<String>?): String? {
+        return list?.joinToString(",")
+    }
+
+    /**
+     * Converts comma-separated string to List<String>.
+     */
+    @TypeConverter
+    fun toStringList(data: String?): List<String>? {
+        return data?.split(",")?.filter { it.isNotEmpty() }
+    }
+}
+
+// ============================================================================
+// Relation Models (for complex queries)
+// ============================================================================
+
+/**
+ * Represents a session with its transcripts.
+ * 
+ * TODO(milestone-2): Use for complex queries
+ */
+data class SessionWithTranscripts(
+    @Embedded val session: SessionEntity,
+    @Relation(
+        parentColumn = "id",
+        entityColumn = "session_id"
+    )
+    val transcripts: List<TranscriptEntity>
+)

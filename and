@@ -1,0 +1,217 @@
+# CMakeLists.txt
+# 
+# CMake configuration for building the Whisper Android JNI library.
+# 
+# This file configures the native build for the whisper_android native library,
+# which provides JNI bindings to whisper.cpp for Android.
+# 
+# Build requirements:
+# - CMake 3.18.1 or higher
+# - Android NDK
+# - C++17 support
+# 
+# TODO(milestone-1): Add whisper.cpp library as a dependency
+# TODO(milestone-1): Configure proper include paths for whisper.cpp
+# TODO(milestone-2): Add GPU acceleration support (NNAPI, Vulkan, OpenCL)
+# TODO(milestone-2): Add build variants for different architectures
+
+cmake_minimum_required(VERSION 3.18.1)
+
+project("whisper_android" LANGUAGES CXX)
+
+# ============================================================================
+# Compiler Configuration
+# ============================================================================
+
+# Set C++ standard
+set(CMAKE_CXX_STANDARD 17)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
+set(CMAKE_CXX_EXTENSIONS OFF)
+
+# Compiler flags
+set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Wall -Wextra -Werror")
+set(CMAKE_CXX_FLAGS_RELEASE "${CMAKE_CXX_FLAGS_RELEASE} -O3 -DNDEBUG")
+set(CMAKE_CXX_FLAGS_DEBUG "${CMAKE_CXX_FLAGS_DEBUG} -O0 -g")
+
+# Enable position independent code
+set(CMAKE_POSITION_INDEPENDENT_CODE ON)
+
+# ============================================================================
+# Source Files
+# ============================================================================
+
+# Native library source files
+set(NATIVE_SRCS
+    whisper_android.cpp
+)
+
+# TODO(milestone-1): Add whisper.cpp source files when library is integrated
+# set(WHISPER_SRCS
+#     ${CMAKE_SOURCE_DIR}/whisper.cpp/whisper.cpp
+#     ${CMAKE_SOURCE_DIR}/whisper.cpp/ggml.c
+# )
+
+# ============================================================================
+# Include Directories
+# ============================================================================
+
+# Include directories for this project
+include_directories(
+    ${CMAKE_SOURCE_DIR}
+)
+
+# TODO(milestone-1): Add whisper.cpp include directory
+# include_directories(
+#     ${CMAKE_SOURCE_DIR}/whisper.cpp
+# )
+
+# ============================================================================
+# Native Library Target
+# ============================================================================
+
+# Create the shared library
+add_library(
+    whisper_android
+    SHARED
+    ${NATIVE_SRCS}
+    # ${WHISPER_SRCS}  # TODO: Uncomment when whisper.cpp is added
+)
+
+# ============================================================================
+# Link Libraries
+# ============================================================================
+
+# Find required Android libraries
+find_library(log-lib log)
+find_library(android-lib android)
+
+# Link against Android libraries
+target_link_libraries(
+    whisper_android
+    ${log-lib}
+    ${android-lib}
+)
+
+# TODO(milestone-1): Link against whisper.cpp library
+# If whisper.cpp is built as a separate library:
+# find_library(whisper-lib whisper PATHS ${CMAKE_SOURCE_DIR}/whisper.cpp/build)
+# target_link_libraries(
+#     whisper_android
+#     ${whisper-lib}
+# )
+
+# ============================================================================
+# Platform-Specific Configuration
+# ============================================================================
+
+# Android-specific settings
+if(ANDROID)
+    message(STATUS "Building for Android")
+    message(STATUS "Android ABI: ${ANDROID_ABI}")
+    message(STATUS "Android Platform: ${ANDROID_PLATFORM}")
+    message(STATUS "Android NDK: ${ANDROID_NDK}")
+    
+    # Set Android API level
+    set(ANDROID_MIN_SDK_VERSION 26)
+    
+    # Architecture-specific optimizations
+    if(ANDROID_ABI STREQUAL "arm64-v8a")
+        message(STATUS "Enabling ARM64 optimizations")
+        set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -march=armv8-a")
+        
+        # TODO(milestone-2): Enable NEON optimizations for ARM64
+        # set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -mfpu=neon")
+        
+    elseif(ANDROID_ABI STREQUAL "armeabi-v7a")
+        message(STATUS "Enabling ARMv7 optimizations")
+        set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -march=armv7-a -mfloat-abi=softfp")
+        
+        # TODO(milestone-2): Enable NEON optimizations for ARMv7
+        # set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -mfpu=neon")
+        
+    elseif(ANDROID_ABI STREQUAL "x86_64")
+        message(STATUS "Building for x86_64")
+        set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -march=x86-64")
+        
+    elseif(ANDROID_ABI STREQUAL "x86")
+        message(STATUS "Building for x86")
+        set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -march=i686")
+    endif()
+endif()
+
+# ============================================================================
+# GPU Acceleration (Optional)
+# ============================================================================
+
+# TODO(milestone-2): Add NNAPI support for Android GPU acceleration
+# option(WHISPER_NNAPI "Enable NNAPI support" OFF)
+# if(WHISPER_NNAPI)
+#     message(STATUS "NNAPI support enabled")
+#     target_compile_definitions(whisper_android PRIVATE WHISPER_USE_NNAPI)
+#     find_library(nnapi-lib neuralnetworks)
+#     target_link_libraries(whisper_android ${nnapi-lib})
+# endif()
+
+# TODO(milestone-2): Add Vulkan support
+# option(WHISPER_VULKAN "Enable Vulkan support" OFF)
+# if(WHISPER_VULKAN)
+#     message(STATUS "Vulkan support enabled")
+#     target_compile_definitions(whisper_android PRIVATE WHISPER_USE_VULKAN)
+#     find_library(vulkan-lib vulkan)
+#     target_link_libraries(whisper_android ${vulkan-lib})
+# endif()
+
+# ============================================================================
+# Build Options
+# ============================================================================
+
+# Option to enable verbose logging
+option(WHISPER_DEBUG_LOGGING "Enable debug logging" ON)
+if(WHISPER_DEBUG_LOGGING)
+    target_compile_definitions(whisper_android PRIVATE WHISPER_DEBUG)
+endif()
+
+# Option to enable performance profiling
+option(WHISPER_PROFILE "Enable performance profiling" OFF)
+if(WHISPER_PROFILE)
+    target_compile_definitions(whisper_android PRIVATE WHISPER_PROFILE)
+endif()
+
+# ============================================================================
+# Installation (Optional)
+# ============================================================================
+
+# Install the shared library
+install(
+    TARGETS whisper_android
+    LIBRARY DESTINATION lib
+)
+
+# ============================================================================
+# Testing Configuration
+# ============================================================================
+
+# TODO(milestone-2): Add native tests
+# option(WHISPER_BUILD_TESTS "Build tests" OFF)
+# if(WHISPER_BUILD_TESTS)
+#     enable_testing()
+#     add_subdirectory(tests)
+# endif()
+
+# ============================================================================
+# Print Configuration Summary
+# ============================================================================
+
+message(STATUS "=================================================")
+message(STATUS "Whisper Android Native Library Configuration")
+message(STATUS "=================================================")
+message(STATUS "CMake Version: ${CMAKE_VERSION}")
+message(STATUS "Project: ${PROJECT_NAME}")
+message(STATUS "C++ Standard: ${CMAKE_CXX_STANDARD}")
+message(STATUS "Build Type: ${CMAKE_BUILD_TYPE}")
+message(STATUS "C++ Flags: ${CMAKE_CXX_FLAGS}")
+if(ANDROID)
+    message(STATUS "Android ABI: ${ANDROID_ABI}")
+    message(STATUS "Android Platform: ${ANDROID_PLATFORM}")
+endif()
+message(STATUS "=================================================")

@@ -4,7 +4,8 @@ Pydantic settings configuration for environment variables.
 """
 
 from typing import Optional
-from pydantic import BaseSettings, Field
+from pydantic_settings import BaseSettings, SettingsConfigDict
+from pydantic import Field
 
 
 class Settings(BaseSettings):
@@ -16,7 +17,7 @@ class Settings(BaseSettings):
 
     server_host: str = Field(default="0.0.0.0", description="Server bind host")
     server_port: int = Field(default=8000, description="Server bind port")
-    server_url: str = Field(..., description="Public server URL for mobile app")
+    server_url: str = Field(default="https://app-z0dhx-8000.tdc.zoskw.beta.runos.xyz", description="Public server URL for mobile app")
 
     # Security
     https_enabled: bool = Field(default=True, description="Enable HTTPS enforcement")
@@ -121,7 +122,7 @@ class Settings(BaseSettings):
     log_level: str = Field(
         default="INFO",
         description="Logging level",
-        regex="^(DEBUG|INFO|WARNING|ERROR|CRITICAL)$"
+        pattern="^(DEBUG|INFO|WARNING|ERROR|CRITICAL)$"
     )
 
     log_json_format: bool = Field(
@@ -135,11 +136,12 @@ class Settings(BaseSettings):
 
     debug: bool = Field(default=False, description="Enable debug mode")
 
-    class Config:
-        """Pydantic configuration."""
-        env_file = ".env"
-        env_file_encoding = "utf-8"
-        case_sensitive = False
+    model_config = SettingsConfigDict(
+        env_file=".env",
+        env_file_encoding="utf-8",
+        case_sensitive=False,
+        extra="ignore",
+    )
 
 
 # Global settings instance

@@ -36,20 +36,13 @@
 
 ### 3. Configure Environment Variables
 
-**macOS/Linux**:
+**macOS - your terminal**:
 ```bash
 # Add to ~/.zshrc or ~/.bashrc
 export ANDROID_HOME=$HOME/Library/Android/sdk
 export PATH=$PATH:$ANDROID_HOME/emulator
 export PATH=$PATH:$ANDROID_HOME/platform-tools
 ```
-
-**Windows**:
-```cmd
-setx ANDROID_HOME "C:\Users\%USERNAME%\AppData\Local\Android\Sdk"
-setx PATH "%PATH%;%ANDROID_HOME%\emulator;%ANDROID_HOME%\platform-tools"
-```
-
 ### 4. Verify Installation
 
 ```bash
@@ -68,14 +61,14 @@ emulator -version
 
 ## Project Setup
 
-### 1. Clone Repository
+### 1. Clone Repository (already done, we are here)
 
 ```bash
 git clone https://github.com/limitless-companion/limitless-companion.git
 cd limitless-companion
 ```
 
-### 2. Open Project in Android Studio
+### 2. Open Project in Android Studio (but I want to edit from within antigravity, here)
 
 1. **Launch Android Studio**
 2. **File → Open**
@@ -391,13 +384,3 @@ jobs:
 - [Android Developer Documentation](https://developer.android.com/)
 - [Kotlin Documentation](https://kotlinlang.org/docs/)
 - [Jetpack Compose Guide](https://developer.android.com/jetpack/compose)
-
-### Community Resources
-- [Stack Overflow](https://stackoverflow.com/questions/tagged/android)
-- [Android Developers Community](https://developer.android.com/community)
-- [Kotlin Slack](https://kotlinlang.slack.com/)
-
-### Project-Specific Help
-- Check [CONTRIBUTING.md](../CONTRIBUTING.md) for project guidelines
-- Open issues on GitHub for bugs or feature requests
-- Join discussions for questions and feedback

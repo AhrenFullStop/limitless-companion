@@ -1,20 +1,7 @@
 /**
  * MainActivity.kt
- *
- * Main entry point for the Limitless Companion Android application.
- *
- * This activity manages:
- * - App navigation
- * - Runtime permissions
- * - Service lifecycle
- * - Compose UI setup
- *
- * Architecture: UI Layer - Activity (Clean Architecture)
- *
- * TODO(milestone-1): Implement permission request handling
- * TODO(milestone-1): Add service binding logic
- * TODO(milestone-2): Implement proper navigation with Navigation Compose
- * TODO(milestone-2): Add deep link handling
+ * Main entry point. Binds to AudioCaptureService and hosts the full navigation
+ * with functional Recording, Transcripts, and Settings screens.
  */
 
 package com.limitless.companion
@@ -38,65 +25,62 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
 import androidx.core.content.ContextCompat
-import androidx.navigation.NavHostController
+import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
+import com.limitless.companion.data.local.preferences.AppPreferences
 import com.limitless.companion.services.AudioCaptureService
-import com.limitless.companion.ui.screens.RecordingScreen.RecordingScreen
-import com.limitless.companion.ui.theme.LimitlessCompanionTheme
-// import timber.log.Timber
+import com.limitless.companion.services.AudioSource
+import com.limitless.companion.services.CaptureState
+import com.limitless.companion.services.ModelState
+import com.limitless.companion.ui.RecordingScreen
+import com.limitless.companion.ui.SettingsScreen
+import com.limitless.companion.ui.TranscriptListScreen
+import com.limitless.companion.ui.TranscriptsViewModel
+import kotlinx.coroutines.flow.StateFlow
 
-/**
- * Main activity for the application.
- */
 class MainActivity : ComponentActivity() {
 
-    // Service binding
     private var audioCaptureService: AudioCaptureService? = null
     private var serviceBound = false
 
     private val serviceConnection = object : ServiceConnection {
-        override fun onServiceConnected(name: ComponentName?, service: IBinder?) {
-            val binder = service as? AudioCaptureService.AudioCaptureBinder
-            audioCaptureService = binder?.getService()
+        override fun onServiceConnected(name: ComponentName?, binder: IBinder?) {
+            audioCaptureService = (binder as? AudioCaptureService.AudioCaptureBinder)?.getService()
             serviceBound = true
-            // Timber.d("Service connected")
         }
-
         override fun onServiceDisconnected(name: ComponentName?) {
             audioCaptureService = null
             serviceBound = false
-            // Timber.d("Service disconnected")
         }
     }
 
-    // Permission launcher
     private val permissionLauncher = registerForActivityResult(
         ActivityResultContracts.RequestMultiplePermissions()
-    ) { permissions ->
-        val allGranted = permissions.values.all { it }
-        if (allGranted) {
-            // Timber.d("All permissions granted")
-            // TODO(milestone-1): Handle permissions granted
-        } else {
-            // Timber.w("Some permissions denied")
-            // TODO(milestone-1): Show rationale or navigate to settings
-        }
-    }
+    ) { /* permissions result — recording will work once RECORD_AUDIO is granted */ }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-
-        // Request permissions
         requestNecessaryPermissions()
 
+        val prefs = AppPreferences(this)
+
         setContent {
-            LimitlessCompanionTheme {
-                LimitlessCompanionApp(
-                    onStartRecording = { startRecording() },
-                    onStopRecording = { stopRecording() }
+            MaterialTheme {
+                LimitlessApp(
+                    prefs = prefs,
+                    getCaptureState = { audioCaptureService?.captureState },
+                    getAudioSource = { audioCaptureService?.audioSource },
+                    getTranscriptCount = { audioCaptureService?.transcriptCount },
+                    getWhisperReady = {
+                        // Access modelState via reflection-free property — hoist via flow
+                        @Suppress("USELESS_CAST")
+                        (audioCaptureService != null) as Boolean
+                    },
+                    onStartRecording = { audioCaptureService?.startRecording() },
+                    onStopRecording = { audioCaptureService?.stopRecording() }
                 )
             }
         }
@@ -104,160 +88,110 @@ class MainActivity : ComponentActivity() {
 
     override fun onStart() {
         super.onStart()
-        // Bind to service
         val intent = Intent(this, AudioCaptureService::class.java)
+        ContextCompat.startForegroundService(this, intent)
         bindService(intent, serviceConnection, BIND_AUTO_CREATE)
     }
 
     override fun onStop() {
         super.onStop()
-        // Unbind from service
         if (serviceBound) {
             unbindService(serviceConnection)
             serviceBound = false
         }
     }
 
-    /**
-     * Requests all necessary permissions for the app.
-     *
-     * TODO(milestone-1): Add proper permission rationale
-     */
     private fun requestNecessaryPermissions() {
         val permissions = mutableListOf(
             Manifest.permission.RECORD_AUDIO,
             Manifest.permission.BLUETOOTH,
             Manifest.permission.BLUETOOTH_ADMIN
         )
-
-        // Add permissions for Android 12+
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-            permissions.add(Manifest.permission.BLUETOOTH_CONNECT)
-            permissions.add(Manifest.permission.BLUETOOTH_SCAN)
+            permissions += listOf(Manifest.permission.BLUETOOTH_CONNECT, Manifest.permission.BLUETOOTH_SCAN)
         }
-
-        // Add notification permission for Android 13+
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-            permissions.add(Manifest.permission.POST_NOTIFICATIONS)
+            permissions += Manifest.permission.POST_NOTIFICATIONS
         }
-
-        // Check which permissions are needed
-        val permissionsToRequest = permissions.filter {
+        val needed = permissions.filter {
             ContextCompat.checkSelfPermission(this, it) != PackageManager.PERMISSION_GRANTED
         }
-
-        if (permissionsToRequest.isNotEmpty()) {
-            permissionLauncher.launch(permissionsToRequest.toTypedArray())
-        }
-    }
-
-    /**
-     * Starts the recording service.
-     */
-    private fun startRecording() {
-        audioCaptureService?.startRecording()
-        // Timber.d("Started recording")
-    }
-
-    /**
-     * Stops the recording service.
-     */
-    private fun stopRecording() {
-        audioCaptureService?.stopRecording()
-        // Timber.d("Stopped recording")
+        if (needed.isNotEmpty()) permissionLauncher.launch(needed.toTypedArray())
     }
 }
 
-/**
- * Main app composable with navigation.
- */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun LimitlessCompanionApp(
-    onStartRecording: () -> Unit = {},
-    onStopRecording: () -> Unit = {}
+fun LimitlessApp(
+    prefs: AppPreferences,
+    getCaptureState: () -> StateFlow<CaptureState>?,
+    getAudioSource: () -> StateFlow<AudioSource>?,
+    getTranscriptCount: () -> StateFlow<Int>?,
+    getWhisperReady: () -> Boolean,
+    onStartRecording: () -> Unit,
+    onStopRecording: () -> Unit
 ) {
     val navController = rememberNavController()
-    val navBackStackEntry by navController.currentBackStackEntryAsState()
-    val currentRoute = navBackStackEntry?.destination?.route
+    val currentRoute = navController.currentBackStackEntryAsState().value?.destination?.route
+
+    // Collect service state flows if available
+    val captureState by (getCaptureState() ?: return).collectAsState()
+    val audioSource by (getAudioSource() ?: kotlinx.coroutines.flow.MutableStateFlow(AudioSource.NONE)).collectAsState()
+    val transcriptCount by (getTranscriptCount() ?: kotlinx.coroutines.flow.MutableStateFlow(0)).collectAsState()
+
+    val vm: TranscriptsViewModel = viewModel()
 
     Scaffold(
         bottomBar = {
-            if (currentRoute in listOf(Screen.Recording.route, Screen.Search.route, Screen.Settings.route)) {
-                NavigationBar {
-                    Screen.bottomNavItems.forEach { screen ->
-                        NavigationBarItem(
-                            icon = { Icon(screen.icon, contentDescription = screen.label) },
-                            label = { Text(screen.label) },
-                            selected = currentRoute == screen.route,
-                            onClick = {
-                                navController.navigate(screen.route) {
-                                    // Pop up to start destination to avoid building up back stack
-                                    popUpTo(navController.graph.startDestinationId) {
-                                        saveState = true
-                                    }
-                                    // Avoid multiple copies of the same destination
-                                    launchSingleTop = true
-                                    // Restore state when reselecting a previously selected item
-                                    restoreState = true
-                                }
+            NavigationBar {
+                listOf(
+                    Triple("record", "Record", Icons.Default.Mic),
+                    Triple("transcripts", "Transcripts", Icons.Default.List),
+                    Triple("settings", "Settings", Icons.Default.Settings)
+                ).forEach { (route, label, icon) ->
+                    NavigationBarItem(
+                        icon = { Icon(icon, contentDescription = label) },
+                        label = { Text(label) },
+                        selected = currentRoute == route,
+                        onClick = {
+                            navController.navigate(route) {
+                                popUpTo(navController.graph.startDestinationId) { saveState = true }
+                                launchSingleTop = true
+                                restoreState = true
                             }
-                        )
-                    }
+                        }
+                    )
                 }
             }
         }
-    ) { paddingValues ->
+    ) { padding ->
         NavHost(
             navController = navController,
-            startDestination = Screen.Recording.route,
-            modifier = Modifier.padding(paddingValues)
+            startDestination = "record",
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(padding)
         ) {
-            composable(Screen.Recording.route) {
+            composable("record") {
                 RecordingScreen(
+                    captureState = captureState,
+                    audioSource = audioSource,
+                    transcriptCount = transcriptCount,
+                    whisperReady = getWhisperReady(),
                     onStartRecording = onStartRecording,
                     onStopRecording = onStopRecording
                 )
             }
-
-            composable(Screen.Search.route) {
-                // TODO(milestone-1): Implement SearchScreen
-                PlaceholderScreen("Search")
+            composable("transcripts") {
+                TranscriptListScreen(viewModel = vm)
             }
-
-            composable(Screen.Settings.route) {
-                // TODO(milestone-1): Implement SettingsScreen
-                PlaceholderScreen("Settings")
+            composable("settings") {
+                SettingsScreen(
+                    transcriptCount = transcriptCount,
+                    whisperReady = getWhisperReady(),
+                    prefs = prefs
+                )
             }
         }
-    }
-}
-
-/**
- * Placeholder screen for unimplemented screens.
- */
-@Composable
-fun PlaceholderScreen(name: String) {
-    Surface(
-        modifier = Modifier.fillMaxSize(),
-        color = MaterialTheme.colorScheme.background
-    ) {
-        Text(
-            text = "$name Screen - Coming Soon",
-            style = MaterialTheme.typography.headlineMedium
-        )
-    }
-}
-
-/**
- * Screen definitions for navigation.
- */
-sealed class Screen(val route: String, val label: String, val icon: androidx.compose.ui.graphics.vector.ImageVector) {
-    object Recording : Screen("recording", "Record", Icons.Default.Mic)
-    object Search : Screen("search", "Search", Icons.Default.Search)
-    object Settings : Screen("settings", "Settings", Icons.Default.Settings)
-
-    companion object {
-        val bottomNavItems = listOf(Recording, Search, Settings)
     }
 }

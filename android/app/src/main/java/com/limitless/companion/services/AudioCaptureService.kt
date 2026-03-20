@@ -1,20 +1,11 @@
 /**
  * AudioCaptureService.kt
- * 
- * Android Foreground Service responsible for capturing audio from Bluetooth devices.
- * 
- * This service manages the complete audio capture pipeline:
- * - Bluetooth SCO (Synchronous Connection-Oriented) setup for headset audio
- * - AudioRecord configuration for raw audio capture
- * - Audio buffer management and streaming
- * - Power management for continuous recording
- * 
- * Architecture: Service Layer (Clean Architecture)
- * 
- * TODO(milestone-1): Implement actual audio capture logic
- * TODO(milestone-1): Add Bluetooth device discovery and connection management
- * TODO(milestone-2): Implement adaptive buffer sizing based on device capabilities
- * TODO(milestone-2): Add audio quality monitoring and automatic adjustment
+ *
+ * Foreground service for continuous audio capture from Bluetooth devices,
+ * with automatic fallback to the device microphone.
+ *
+ * Records audio in 30-second chunks, transcribes each chunk via WhisperService,
+ * and persists transcripts to the local Room database.
  */
 
 package com.limitless.companion.services
@@ -25,8 +16,6 @@ import android.app.NotificationManager
 import android.app.PendingIntent
 import android.app.Service
 import android.bluetooth.BluetoothAdapter
-import android.bluetooth.BluetoothHeadset
-import android.bluetooth.BluetoothProfile
 import android.content.Context
 import android.content.Intent
 import android.media.AudioFormat
@@ -41,65 +30,65 @@ import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import com.limitless.companion.data.local.preferences.AppPreferences
+import com.limitless.companion.data.remote.NetworkClient
+import com.limitless.companion.data.remote.DeviceRegisterRequest
+import com.limitless.companion.data.remote.TranscriptUploadRequest
+import android.provider.Settings
 import java.nio.ByteBuffer
-// import timber.log.Timber
+import android.content.BroadcastReceiver
+import android.content.IntentFilter
+import android.media.AudioManager
+import android.util.Log
+import com.limitless.companion.data.local.db.SessionEntity
+import com.limitless.companion.data.local.db.TranscriptDatabase
+import com.limitless.companion.data.local.db.TranscriptEntity
+import java.util.UUID
 
-/**
- * Audio capture state representing the current recording status.
- */
 enum class CaptureState {
-    IDLE,
-    INITIALIZING,
-    RECORDING,
-    PAUSED,
-    STOPPED,
-    ERROR
+    IDLE, INITIALIZING, RECORDING, PAUSED, STOPPED, ERROR
 }
 
-/**
- * Configuration for audio capture parameters.
- */
+enum class AudioSource {
+    BLUETOOTH, MICROPHONE, NONE
+}
+
 data class AudioCaptureConfig(
-    val sampleRate: Int = 16000,  // 16kHz optimal for Whisper
+    val sampleRate: Int = 16000,
     val channelConfig: Int = AudioFormat.CHANNEL_IN_MONO,
     val audioFormat: Int = AudioFormat.ENCODING_PCM_16BIT,
-    val bufferSizeMultiplier: Int = 2  // Multiplier for minimum buffer size
+    val bufferSizeMultiplier: Int = 2
 )
 
-/**
- * Foreground service for continuous audio capture from Bluetooth devices.
- * 
- * This service runs as a foreground service to ensure it's not killed by the system
- * during extended recording sessions. It manages Bluetooth SCO connections and
- * provides audio data to consumers via a Flow.
- */
 class AudioCaptureService : Service() {
 
-    // Service binding
     private val binder = AudioCaptureBinder()
-
-    // Coroutine scope for service lifecycle
     private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
 
-    // Audio capture state
     private val _captureState = MutableStateFlow(CaptureState.IDLE)
     val captureState: StateFlow<CaptureState> = _captureState.asStateFlow()
 
-    // Audio stream
-    private val _audioStream = MutableStateFlow<ByteBuffer?>(null)
-    val audioStream: StateFlow<ByteBuffer?> = _audioStream.asStateFlow()
+    private val _audioSource = MutableStateFlow(AudioSource.NONE)
+    val audioSource: StateFlow<AudioSource> = _audioSource.asStateFlow()
 
-    // Audio components
+    private val _transcriptCount = MutableStateFlow(0)
+    val transcriptCount: StateFlow<Int> = _transcriptCount.asStateFlow()
+
     private var audioRecord: AudioRecord? = null
     private var recordingJob: Job? = null
     private var wakeLock: PowerManager.WakeLock? = null
+    private var audioManager: AudioManager? = null
 
-    // Bluetooth components
     private var bluetoothAdapter: BluetoothAdapter? = null
-    private var bluetoothHeadset: BluetoothHeadset? = null
-    private var scoConnectionState = BluetoothHeadset.STATE_AUDIO_DISCONNECTED
+    private var scoReceiver: BroadcastReceiver? = null
+    private var scoConnected = false
 
-    // Configuration
+    private lateinit var whisperService: WhisperService
+    private lateinit var db: TranscriptDatabase
+    private var currentSessionId: String? = null
+    private lateinit var appPreferences: AppPreferences
+    private var deviceId: String = ""
+
     private var config = AudioCaptureConfig()
 
     companion object {
@@ -107,27 +96,76 @@ class AudioCaptureService : Service() {
         private const val CHANNEL_ID = "audio_capture_channel"
         private const val CHANNEL_NAME = "Audio Recording"
         private const val WAKE_LOCK_TAG = "LimitlessCompanion::AudioCaptureWakeLock"
+        private const val BUFFER_READ_SIZE = 1024
+        private const val TAG = "AudioCaptureService"
 
-        // Audio buffer configuration
-        private const val BUFFER_READ_SIZE = 1024  // Bytes to read per cycle
+        const val ACTION_START_RECORDING = "com.limitless.companion.ACTION_START_RECORDING"
+        const val ACTION_STOP_RECORDING = "com.limitless.companion.ACTION_STOP_RECORDING"
+        const val ACTION_PAUSE_RECORDING = "com.limitless.companion.ACTION_PAUSE_RECORDING"
+        const val ACTION_RESUME_RECORDING = "com.limitless.companion.ACTION_RESUME_RECORDING"
     }
 
     override fun onCreate() {
         super.onCreate()
-        // Timber.d("AudioCaptureService created")
-        
-        initializeBluetoothComponents()
+        Log.d(TAG, "AudioCaptureService created")
+
+        audioManager = getSystemService(Context.AUDIO_SERVICE) as AudioManager
+        bluetoothAdapter = BluetoothAdapter.getDefaultAdapter()
+        db = TranscriptDatabase.getInstance(this)
+        whisperService = WhisperService(this)
+
+        // Register SCO state receiver
+        scoReceiver = object : BroadcastReceiver() {
+            override fun onReceive(context: Context?, intent: Intent?) {
+                val state = intent?.getIntExtra(AudioManager.EXTRA_SCO_AUDIO_STATE, -1)
+                scoConnected = (state == AudioManager.SCO_AUDIO_STATE_CONNECTED)
+                Log.d(TAG, "SCO state changed: connected=$scoConnected")
+            }
+        }
+        @Suppress("DEPRECATION")
+        registerReceiver(scoReceiver, IntentFilter(AudioManager.ACTION_SCO_AUDIO_STATE_UPDATED))
+
+        appPreferences = AppPreferences(this)
+        // Hardcode the RunOS server URL for now if not set
+        if (appPreferences.getServerUrl() == "https://api.limitless.app") {
+            appPreferences.setServerUrl("https://app-z0dhx-8000.tdc.zoskw.beta.runos.xyz")
+        }
+
+        deviceId = Settings.Secure.getString(contentResolver, Settings.Secure.ANDROID_ID) ?: "unknown_device"
+
+        // Download model and initialize Whisper in the background
+        serviceScope.launch {
+            // Register device
+            try {
+                val api = NetworkClient.getApiService(appPreferences.getServerUrl())
+                val response = api.registerDevice(DeviceRegisterRequest(deviceId, android.os.Build.MODEL))
+                Log.d(TAG, "Device registration status: ${response.code()}")
+            } catch (e: Exception) {
+                Log.w(TAG, "Failed to register device: ${e.message}")
+            }
+
+            val modelPath = whisperService.downloadModel(WhisperService.DEFAULT_MODEL_NAME)
+            if (modelPath != null) {
+                val result = whisperService.initialize(WhisperConfig(modelPath = modelPath))
+                Log.d(TAG, "Whisper initialized: $result")
+                // Update transcript count from DB
+                _transcriptCount.value = db.transcriptDao().count()
+                // Auto-start recording once the model is ready
+                if (result) {
+                    startRecording()
+                }
+            } else {
+                Log.e(TAG, "Failed to download Whisper model")
+            }
+        }
+
         acquireWakeLock()
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-        // Timber.d("AudioCaptureService started")
-        
-        // Start foreground service with notification
         val notification = createNotification()
         startForeground(NOTIFICATION_ID, notification)
 
-        // Handle intent actions
         when (intent?.action) {
             ACTION_START_RECORDING -> startRecording()
             ACTION_STOP_RECORDING -> stopRecording()
@@ -138,74 +176,58 @@ class AudioCaptureService : Service() {
         return START_STICKY
     }
 
-    override fun onBind(intent: Intent?): IBinder {
-        return binder
-    }
+    override fun onBind(intent: Intent?): IBinder = binder
 
     override fun onDestroy() {
-        // Timber.d("AudioCaptureService destroyed")
-        
         stopRecording()
         releaseWakeLock()
+        scoReceiver?.let { unregisterReceiver(it) }
         disconnectBluetoothSco()
         serviceScope.cancel()
-        
         super.onDestroy()
     }
 
-    // Public API
+    // ---- Public API ----
 
-    /**
-     * Starts audio recording from the configured source.
-     * 
-     * @return true if recording started successfully, false otherwise
-     */
     fun startRecording(): Boolean {
-        if (_captureState.value == CaptureState.RECORDING) {
-            // Timber.w("Already recording")
-            return true
-        }
+        if (_captureState.value == CaptureState.RECORDING) return true
 
         _captureState.value = CaptureState.INITIALIZING
 
-        try {
-            // TODO(milestone-1): Implement Bluetooth device selection
-            // TODO(milestone-1): Check permissions (RECORD_AUDIO, BLUETOOTH_CONNECT)
-            
-            if (!connectBluetoothSco()) {
-                // Timber.e("Failed to connect Bluetooth SCO")
+        // Try Bluetooth SCO (non-blocking — best effort)
+        val scoAttempted = tryConnectBluetoothSco()
+
+        if (!initializeAudioRecord(useSco = scoAttempted && scoConnected)) {
+            // SCO might not be ready yet — fall back to mic
+            Log.w(TAG, "AudioRecord init failed with SCO=$scoAttempted, trying plain mic")
+            if (!initializeAudioRecord(useSco = false)) {
+                Log.e(TAG, "AudioRecord init failed on both sources")
                 _captureState.value = CaptureState.ERROR
                 return false
             }
-
-            if (!initializeAudioRecord()) {
-                // Timber.e("Failed to initialize AudioRecord")
-                _captureState.value = CaptureState.ERROR
-                return false
-            }
-
-            startAudioCapture()
-            _captureState.value = CaptureState.RECORDING
-            
-            // Timber.i("Audio recording started successfully")
-            return true
-
-        } catch (e: Exception) {
-            // Timber.e(e, "Failed to start recording")
-            _captureState.value = CaptureState.ERROR
-            return false
         }
+
+        // Create a recording session in DB
+        val sessionId = UUID.randomUUID().toString()
+        currentSessionId = sessionId
+        serviceScope.launch {
+            db.sessionDao().insert(
+                SessionEntity(
+                    id = sessionId,
+                    startedAt = System.currentTimeMillis(),
+                    audioSource = _audioSource.value.name
+                )
+            )
+        }
+
+        startAudioCapture()
+        _captureState.value = CaptureState.RECORDING
+        Log.i(TAG, "Recording started, source=${_audioSource.value}")
+        return true
     }
 
-    /**
-     * Stops audio recording and releases resources.
-     */
     fun stopRecording() {
-        if (_captureState.value == CaptureState.IDLE || _captureState.value == CaptureState.STOPPED) {
-            return
-        }
-
-        // Timber.i("Stopping audio recording")
+        if (_captureState.value == CaptureState.IDLE || _captureState.value == CaptureState.STOPPED) return
 
         recordingJob?.cancel()
         audioRecord?.stop()
@@ -213,285 +235,275 @@ class AudioCaptureService : Service() {
         audioRecord = null
 
         disconnectBluetoothSco()
-
         _captureState.value = CaptureState.STOPPED
-        _audioStream.value = null
-    }
 
-    /**
-     * Pauses audio recording without releasing resources.
-     * 
-     * TODO(milestone-2): Implement pause functionality
-     */
-    fun pauseRecording() {
-        if (_captureState.value != CaptureState.RECORDING) {
-            return
-        }
-
-        // Timber.i("Pausing audio recording")
-        
-        // TODO(milestone-2): Implement pause logic
-        _captureState.value = CaptureState.PAUSED
-    }
-
-    /**
-     * Resumes audio recording after pause.
-     * 
-     * TODO(milestone-2): Implement resume functionality
-     */
-    fun resumeRecording() {
-        if (_captureState.value != CaptureState.PAUSED) {
-            return
-        }
-
-        // Timber.i("Resuming audio recording")
-        
-        // TODO(milestone-2): Implement resume logic
-        _captureState.value = CaptureState.RECORDING
-    }
-
-    /**
-     * Updates the audio capture configuration.
-     * 
-     * @param newConfig New configuration to apply
-     * @return true if config was updated successfully
-     * 
-     * TODO(milestone-2): Implement dynamic configuration updates
-     */
-    fun updateConfiguration(newConfig: AudioCaptureConfig): Boolean {
-        if (_captureState.value == CaptureState.RECORDING) {
-            // Timber.w("Cannot update config while recording")
-            return false
-        }
-
-        config = newConfig
-        // Timber.d("Audio config updated: $config")
-        return true
-    }
-
-    // Private implementation
-
-    /**
-     * Initializes Bluetooth components for headset audio.
-     * 
-     * TODO(milestone-1): Implement full Bluetooth profile management
-     */
-    private fun initializeBluetoothComponents() {
-        try {
-            bluetoothAdapter = BluetoothAdapter.getDefaultAdapter()
-            
-            if (bluetoothAdapter == null) {
-                // Timber.e("Bluetooth not supported on this device")
-                return
+        // Close the session
+        val sid = currentSessionId
+        if (sid != null) {
+            serviceScope.launch {
+                val session = db.sessionDao().getActiveSession()
+                if (session != null) {
+                    db.sessionDao().update(session.copy(endedAt = System.currentTimeMillis()))
+                }
             }
-
-            // TODO(milestone-1): Register Bluetooth profile listener
-            // bluetoothAdapter?.getProfileProxy(this, profileListener, BluetoothProfile.HEADSET)
-
-        } catch (e: Exception) {
-            // Timber.e(e, "Failed to initialize Bluetooth components")
+            currentSessionId = null
         }
     }
 
-    /**
-     * Connects Bluetooth SCO for audio streaming.
-     * 
-     * @return true if connection initiated successfully
-     * 
-     * TODO(milestone-1): Implement SCO connection with timeout and retry logic
-     */
-    private fun connectBluetoothSco(): Boolean {
-        // TODO(milestone-1): Implement Bluetooth SCO connection
-        // - Start SCO audio connection
-        // - Wait for STATE_AUDIO_CONNECTED
-        // - Handle connection failures
-        
-        // Timber.d("Connecting Bluetooth SCO...")
-        
-        return true  // Stub: assume success
+    fun pauseRecording() {
+        if (_captureState.value == CaptureState.RECORDING) {
+            _captureState.value = CaptureState.PAUSED
+        }
     }
 
+    fun resumeRecording() {
+        if (_captureState.value == CaptureState.PAUSED) {
+            _captureState.value = CaptureState.RECORDING
+        }
+    }
+
+    // ---- Private helpers ----
+
     /**
-     * Disconnects Bluetooth SCO audio.
+     * Attempt Bluetooth SCO — best effort, returns whether attempt was made.
+     * Does NOT block or fail if unavailable.
      */
+    private fun tryConnectBluetoothSco(): Boolean {
+        return try {
+            if (bluetoothAdapter?.isEnabled == true) {
+                audioManager?.startBluetoothSco()
+                audioManager?.isBluetoothScoOn = true
+                Log.d(TAG, "Bluetooth SCO requested")
+                true
+            } else {
+                Log.d(TAG, "Bluetooth not enabled, skipping SCO")
+                false
+            }
+        } catch (e: SecurityException) {
+            Log.w(TAG, "No BLUETOOTH_CONNECT permission, skipping SCO: ${e.message}")
+            false
+        } catch (e: Exception) {
+            Log.w(TAG, "Failed to start SCO: ${e.message}")
+            false
+        }
+    }
+
     private fun disconnectBluetoothSco() {
         try {
-            // TODO(milestone-1): Implement SCO disconnection
-            // bluetoothAdapter?.stopBluetoothSco()
-            
-            // Timber.d("Bluetooth SCO disconnected")
+            audioManager?.stopBluetoothSco()
+            audioManager?.isBluetoothScoOn = false
+            Log.d(TAG, "Bluetooth SCO disconnected")
         } catch (e: Exception) {
-            // Timber.e(e, "Failed to disconnect Bluetooth SCO")
+            Log.w(TAG, "Error disconnecting SCO: ${e.message}")
         }
     }
 
-    /**
-     * Initializes AudioRecord for capturing audio.
-     * 
-     * @return true if initialized successfully
-     * 
-     * TODO(milestone-1): Implement AudioRecord initialization with proper error handling
-     */
-    private fun initializeAudioRecord(): Boolean {
-        try {
-            val minBufferSize = AudioRecord.getMinBufferSize(
-                config.sampleRate,
-                config.channelConfig,
-                config.audioFormat
+    private fun initializeAudioRecord(useSco: Boolean): Boolean {
+        // Audio sources to try in order of preference for non-SCO recording
+        val sourcesToTry = if (useSco) {
+            listOf(MediaRecorder.AudioSource.VOICE_COMMUNICATION)
+        } else {
+            listOf(
+                MediaRecorder.AudioSource.VOICE_COMMUNICATION, // good near-field, used for VOIP calls
+                MediaRecorder.AudioSource.VOICE_RECOGNITION,   // AGC on, tuned for speech recognition
+                MediaRecorder.AudioSource.MIC                   // standard fallback
             )
-
-            if (minBufferSize == AudioRecord.ERROR_BAD_VALUE) {
-                // Timber.e("Invalid AudioRecord configuration")
-                return false
-            }
-
-            val bufferSize = minBufferSize * config.bufferSizeMultiplier
-
-            // TODO(milestone-1): Implement actual AudioRecord initialization
-            // audioRecord = AudioRecord(
-            //     MediaRecorder.AudioSource.VOICE_COMMUNICATION,  // Use voice communication source for BT
-            //     config.sampleRate,
-            //     config.channelConfig,
-            //     config.audioFormat,
-            //     bufferSize
-            // )
-
-            // if (audioRecord?.state != AudioRecord.STATE_INITIALIZED) {
-            //     Timber.e("AudioRecord not initialized properly")
-            //     return false
-            // }
-
-            // Timber.d("AudioRecord initialized: sampleRate=${config.sampleRate}, bufferSize=$bufferSize")
-            return true
-
-        } catch (e: Exception) {
-            // Timber.e(e, "Failed to initialize AudioRecord")
-            return false
         }
+
+        val minBuf = AudioRecord.getMinBufferSize(
+            config.sampleRate, config.channelConfig, config.audioFormat
+        )
+        if (minBuf == AudioRecord.ERROR_BAD_VALUE) return false
+
+        val bufferSize = minBuf * config.bufferSizeMultiplier
+
+        for (source in sourcesToTry) {
+            try {
+                val record = AudioRecord(
+                    source, config.sampleRate, config.channelConfig, config.audioFormat, bufferSize
+                )
+                if (record.state == AudioRecord.STATE_INITIALIZED) {
+                    audioRecord = record
+                    _audioSource.value = if (useSco) AudioSource.BLUETOOTH else AudioSource.MICROPHONE
+                    Log.d(TAG, "AudioRecord initialized: source=$source (${_audioSource.value}), bufferSize=$bufferSize")
+                    return true
+                }
+                record.release()
+                Log.w(TAG, "AudioRecord source $source failed to initialize, trying next")
+            } catch (e: SecurityException) {
+                Log.e(TAG, "RECORD_AUDIO permission denied: ${e.message}")
+                return false
+            } catch (e: Exception) {
+                Log.w(TAG, "AudioRecord source $source threw ${e.message}, trying next")
+            }
+        }
+        Log.e(TAG, "All audio sources exhausted")
+        return false
     }
 
-    /**
-     * Starts the audio capture loop in a coroutine.
-     * 
-     * TODO(milestone-1): Implement actual audio capture loop
-     */
     private fun startAudioCapture() {
         recordingJob = serviceScope.launch {
-            // TODO(milestone-1): Implement audio capture loop
-            // - Read from AudioRecord
-            // - Package into ByteBuffer
-            // - Emit via _audioStream
-            // - Handle buffer overflows
-            // - Monitor audio quality
-            
-            // Timber.d("Audio capture loop started")
-
             val buffer = ByteArray(BUFFER_READ_SIZE)
-            
+            val bytesPerChunk = config.sampleRate * 2 * 30 // 30s of 16-bit mono PCM
+            val pcmAccumulator = java.io.ByteArrayOutputStream(bytesPerChunk)
+            var chunkStartTime = System.currentTimeMillis()
+
             try {
                 audioRecord?.startRecording()
+                Log.d(TAG, "Audio capture loop started")
 
                 while (isActive && _captureState.value == CaptureState.RECORDING) {
-                    // Stub: simulate reading audio
-                    // val bytesRead = audioRecord?.read(buffer, 0, buffer.size) ?: 0
-                    
-                    // if (bytesRead > 0) {
-                    //     val byteBuffer = ByteBuffer.wrap(buffer.copyOf(bytesRead))
-                    //     _audioStream.value = byteBuffer
-                    // }
+                    val bytesRead = audioRecord?.read(buffer, 0, buffer.size) ?: 0
 
-                    delay(100)  // Stub: prevent busy loop
+                    if (bytesRead > 0) {
+                        pcmAccumulator.write(buffer, 0, bytesRead)
+
+                        // When we've accumulated ~30s of audio, transcribe it
+                        if (pcmAccumulator.size() >= bytesPerChunk) {
+                            val chunkEndTime = System.currentTimeMillis()
+                            val pcmData = pcmAccumulator.toByteArray()
+                            val chunkDurationMs = chunkEndTime - chunkStartTime
+                            val capturedSessionId = currentSessionId
+
+                            // Calculate RMS amplitude to detect silence
+                            val rms = calculateRms(pcmData)
+                            val peak = calculatePeak(pcmData)
+                            Log.d(TAG, "Chunk RMS: %.0f, Peak: %d (speech threshold RMS>200)".format(rms, peak))
+
+                            if (rms < 200.0) {
+                                // Near-silent — skip Whisper to avoid hallucinations
+                                Log.d(TAG, "Chunk is near-silent (RMS=$rms), skipping transcription")
+                            } else {
+                                Log.d(TAG, "Starting transcription of ${pcmData.size / 1024}KB chunk (RMS=$rms)")
+                                // Transcribe in parallel — don't block the capture loop
+                                launch {
+                                    if (whisperService.modelState.value == ModelState.READY && capturedSessionId != null) {
+                                        val result = whisperService.transcribe(ByteBuffer.wrap(pcmData))
+                                        if (result != null && result.text.isNotBlank()) {
+                                            val entity = TranscriptEntity(
+                                                id = UUID.randomUUID().toString(),
+                                                sessionId = capturedSessionId,
+                                                text = result.text.trim(),
+                                                startTime = chunkStartTime,
+                                                durationMs = chunkDurationMs,
+                                                source = "on_device"
+                                            )
+                                            db.transcriptDao().insert(entity)
+                                            _transcriptCount.value = db.transcriptDao().count()
+                                            Log.i(TAG, "Transcript saved locally: \"${result.text.take(80)}...\"")
+                                            
+                                            // Upload to server
+                                            serviceScope.launch {
+                                                uploadToServer(entity)
+                                            }
+                                        } else {
+                                            Log.d(TAG, "Whisper returned empty/blank result for this chunk")
+                                        }
+                                    }
+                                }
+                            }
+
+                            pcmAccumulator.reset()
+                            chunkStartTime = System.currentTimeMillis()
+                        }
+
+                    }
+
+                    delay(10)
                 }
-
             } catch (e: Exception) {
-                // Timber.e(e, "Error in audio capture loop")
+                Log.e(TAG, "Error in audio capture loop: ${e.message}")
                 _captureState.value = CaptureState.ERROR
             }
         }
     }
 
     /**
-     * Acquires a partial wake lock to keep CPU running during recording.
+     * Calculate RMS amplitude of 16-bit little-endian PCM data.
+     * Values range 0-32768. Quiet room ≈ 100-500, speech ≈ 1000-5000.
      */
-    private fun acquireWakeLock() {
-        val powerManager = getSystemService(Context.POWER_SERVICE) as PowerManager
-        wakeLock = powerManager.newWakeLock(
-            PowerManager.PARTIAL_WAKE_LOCK,
-            WAKE_LOCK_TAG
-        ).apply {
-            acquire(10 * 60 * 1000L)  // 10 minutes timeout
+    private fun calculateRms(pcm: ByteArray): Double {
+        var sum = 0.0
+        var i = 0
+        var count = 0
+        while (i + 1 < pcm.size) {
+            val sample = (pcm[i].toInt() and 0xFF) or (pcm[i + 1].toInt() shl 8)
+            sum += sample.toDouble() * sample.toDouble()
+            i += 2
+            count++
         }
-        // Timber.d("Wake lock acquired")
+        return if (count == 0) 0.0 else Math.sqrt(sum / count)
     }
 
-    /**
-     * Releases the wake lock.
-     */
-    private fun releaseWakeLock() {
-        wakeLock?.let {
-            if (it.isHeld) {
-                it.release()
-                // Timber.d("Wake lock released")
-            }
+    private fun calculatePeak(pcm: ByteArray): Int {
+        var peak = 0
+        var i = 0
+        while (i + 1 < pcm.size) {
+            val sample = Math.abs((pcm[i].toInt() and 0xFF) or (pcm[i + 1].toInt() shl 8))
+            if (sample > peak) peak = sample
+            i += 2
         }
+        return peak
+    }
+
+    private suspend fun uploadToServer(transcript: TranscriptEntity) {
+        try {
+            val serverUrl = appPreferences.getServerUrl()
+            val api = NetworkClient.getApiService(serverUrl)
+            val request = TranscriptUploadRequest(
+                session_id = transcript.sessionId,
+                text = transcript.text,
+                start_time = transcript.startTime,
+                duration_ms = transcript.durationMs,
+                source = "on_device"
+            )
+            val response = api.uploadTranscript(request)
+            if (response.isSuccessful) {
+                Log.i(TAG, "Transcript uploaded to server: ${response.body()?.id}")
+            } else {
+                Log.e(TAG, "Failed to upload transcript: ${response.code()} ${response.errorBody()?.string()}")
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "Error uploading transcript: ${e.message}")
+        }
+    }
+
+    private fun acquireWakeLock() {
+        val pm = getSystemService(Context.POWER_SERVICE) as PowerManager
+        wakeLock = pm.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, WAKE_LOCK_TAG).apply {
+            acquire(10 * 60 * 1000L)
+        }
+    }
+
+    private fun releaseWakeLock() {
+        wakeLock?.let { if (it.isHeld) it.release() }
         wakeLock = null
     }
 
-    /**
-     * Creates the foreground service notification.
-     * 
-     * TODO(milestone-1): Improve notification with actions and status
-     */
     private fun createNotification(): Notification {
         createNotificationChannel()
-
-        // TODO(milestone-1): Add notification actions (pause, stop)
-        val intent = Intent(this, AudioCaptureService::class.java)
-        val pendingIntent = PendingIntent.getActivity(
-            this,
-            0,
-            intent,
-            PendingIntent.FLAG_IMMUTABLE
-        )
+        val intent = Intent(this, Class.forName("com.limitless.companion.MainActivity"))
+        val pendingIntent = PendingIntent.getActivity(this, 0, intent, PendingIntent.FLAG_IMMUTABLE)
 
         return NotificationCompat.Builder(this, CHANNEL_ID)
             .setContentTitle("Limitless Companion")
-            .setContentText("Recording audio from Bluetooth device")
-            .setSmallIcon(android.R.drawable.ic_btn_speak_now)  // TODO: Use app icon
+            .setContentText("Tap to open · Audio source: ${_audioSource.value.name.lowercase().replaceFirstChar { it.uppercase() }}")
+            .setSmallIcon(android.R.drawable.ic_btn_speak_now)
             .setContentIntent(pendingIntent)
             .setOngoing(true)
             .build()
     }
 
-    /**
-     * Creates the notification channel for Android O and above.
-     */
     private fun createNotificationChannel() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            val channel = NotificationChannel(
-                CHANNEL_ID,
-                CHANNEL_NAME,
-                NotificationManager.IMPORTANCE_LOW
-            ).apply {
-                description = "Shows when Limitless Companion is recording audio"
+            val channel = NotificationChannel(CHANNEL_ID, CHANNEL_NAME, NotificationManager.IMPORTANCE_LOW).apply {
+                description = "Shows when Limitless Companion is recording"
             }
-
-            val notificationManager = getSystemService(NotificationManager::class.java)
-            notificationManager.createNotificationChannel(channel)
+            getSystemService(NotificationManager::class.java).createNotificationChannel(channel)
         }
     }
 
-    // Binder for bound clients
-
     inner class AudioCaptureBinder : Binder() {
         fun getService(): AudioCaptureService = this@AudioCaptureService
-    }
-
-    // Intent actions
-    companion object Actions {
-        const val ACTION_START_RECORDING = "com.limitless.companion.ACTION_START_RECORDING"
-        const val ACTION_STOP_RECORDING = "com.limitless.companion.ACTION_STOP_RECORDING"
-        const val ACTION_PAUSE_RECORDING = "com.limitless.companion.ACTION_PAUSE_RECORDING"
-        const val ACTION_RESUME_RECORDING = "com.limitless.companion.ACTION_RESUME_RECORDING"
     }
 }

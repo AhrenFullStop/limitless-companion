@@ -31,7 +31,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import java.io.File
 import java.nio.ByteBuffer
-// import timber.log.Timber
+import android.util.Log
 
 /**
  * Whisper model state representing the current model status.
@@ -126,8 +126,8 @@ class WhisperService(private val context: Context) {
         const val WHISPER_CHANNELS = 1  // Mono
         
         init {
-            // TODO(milestone-1): Load native library
-            // System.loadLibrary("whisper_android")
+            // Load native library
+            System.loadLibrary("whisper_android")
         }
     }
 
@@ -159,20 +159,17 @@ class WhisperService(private val context: Context) {
                 return@withContext false
             }
 
-            // TODO(milestone-1): Initialize native Whisper context via JNI
-            // nativeContextPtr = nativeInitialize(
-            //     modelPath = config.modelPath,
-            //     useGPU = false
-            // )
+            // Initialize native Whisper context via JNI
+            nativeContextPtr = nativeInitialize(
+                modelPath = config.modelPath,
+                useGPU = false
+            )
 
-            // if (nativeContextPtr == 0L) {
-            //     Timber.e("Failed to initialize native Whisper context")
-            //     _modelState.value = ModelState.ERROR
-            //     return@withContext false
-            // }
-
-            // Stub: simulate successful initialization
-            nativeContextPtr = 1L  // Non-zero pointer
+            if (nativeContextPtr == 0L) {
+                Log.e("WhisperService", "Failed to initialize native Whisper context")
+                _modelState.value = ModelState.ERROR
+                return@withContext false
+            }
 
             _modelState.value = ModelState.READY
             // Timber.i("Whisper initialized successfully")
@@ -212,33 +209,20 @@ class WhisperService(private val context: Context) {
             // Convert ByteBuffer to float array (required by whisper.cpp)
             val audioFloats = convertPcmToFloat(audioData)
 
-            // TODO(milestone-1): Call native transcription method via JNI
-            // val result = nativeTranscribe(
-            //     contextPtr = nativeContextPtr,
-            //     audioData = audioFloats,
-            //     language = config?.language,
-            //     threads = config?.threads ?: 4
-            // )
-
-            // Stub: return mock transcription result
-            val processingTime = System.currentTimeMillis() - startTime
-            val stubResult = TranscriptionResult(
-                text = "[STUB] Transcribed text will appear here after JNI implementation",
-                confidence = 0.95f,
-                language = config?.language ?: "en",
-                segments = listOf(
-                    TranscriptionSegment(
-                        text = "[STUB] Segment 1",
-                        startTimeMs = 0L,
-                        endTimeMs = 2000L,
-                        confidence = 0.95f
-                    )
-                ),
-                processingTimeMs = processingTime
+            // Call native transcription method via JNI
+            val result = nativeTranscribe(
+                contextPtr = nativeContextPtr,
+                audioData = audioFloats,
+                language = config?.language,
+                threads = config?.threads ?: 4
             )
 
-            // Timber.i("Transcription completed in ${processingTime}ms")
-            return@withContext stubResult
+            val processingTime = System.currentTimeMillis() - startTime
+            
+            val finalResult = result?.copy(processingTimeMs = processingTime)
+
+            Log.i("WhisperService", "Transcription completed in ${processingTime}ms")
+            return@withContext finalResult
 
         } catch (e: Exception) {
             // Timber.e(e, "Transcription failed")
@@ -280,28 +264,62 @@ class WhisperService(private val context: Context) {
         try {
             // Timber.d("Downloading model: $modelName")
 
-            // TODO(milestone-1): Implement actual model download
-            // - Download from Hugging Face or other source
-            // - Verify checksum
-            // - Save to app's private storage
-            // - Report progress via onProgress callback
-
             val modelDir = File(context.filesDir, MODEL_DIRECTORY)
             if (!modelDir.exists()) {
                 modelDir.mkdirs()
             }
 
-            val modelPath = File(modelDir, modelName).absolutePath
-
-            // Stub: simulate download progress
-            for (i in 0..10) {
-                delay(100)
-                onProgress(i / 10.0f)
+            val modelFile = File(modelDir, modelName)
+            if (modelFile.exists()) {
+                Log.d("WhisperService", "Model already exists at ${modelFile.absolutePath}")
+                _modelState.value = ModelState.UNINITIALIZED
+                return@withContext modelFile.absolutePath
             }
 
+            // Using Hugging Face whisper.cpp base.en model URL
+            // Users can customize this, but we'll default to a known good URL for ggml-base.en.bin
+            val modelUrlStr = "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/$modelName"
+            val url = java.net.URL(modelUrlStr)
+            val connection = url.openConnection() as java.net.HttpURLConnection
+            connection.requestMethod = "GET"
+            connection.connect()
+            
+            if (connection.responseCode != java.net.HttpURLConnection.HTTP_OK) {
+                Log.e("WhisperService", "Server returned HTTP ${connection.responseCode} ${connection.responseMessage}")
+                _modelState.value = ModelState.ERROR
+                return@withContext null
+            }
+            
+            val fileLength = connection.contentLength
+            val input = connection.inputStream
+            val output = java.io.FileOutputStream(modelFile)
+
+            val data = ByteArray(4096)
+            var total: Long = 0
+            var count: Int
+            
+            while (input.read(data).also { count = it } != -1) {
+                if (!isActive) {
+                    input.close()
+                    output.close()
+                    modelFile.delete()
+                    return@withContext null
+                }
+                total += count
+                output.write(data, 0, count)
+                if (fileLength > 0) {
+                    onProgress((total.toFloat() / fileLength.toFloat()))
+                }
+            }
+
+            output.flush()
+            output.close()
+            input.close()
+            connection.disconnect()
+
             _modelState.value = ModelState.UNINITIALIZED
-            // Timber.i("Model downloaded to: $modelPath")
-            return@withContext modelPath
+            Log.i("WhisperService", "Model downloaded to: ${modelFile.absolutePath}")
+            return@withContext modelFile.absolutePath
 
         } catch (e: Exception) {
             // Timber.e(e, "Failed to download model")
@@ -337,8 +355,7 @@ class WhisperService(private val context: Context) {
             // Timber.d("Releasing Whisper resources")
 
             if (nativeContextPtr != 0L) {
-                // TODO(milestone-1): Release native context via JNI
-                // nativeRelease(nativeContextPtr)
+                nativeRelease(nativeContextPtr)
                 nativeContextPtr = 0L
             }
 
@@ -363,11 +380,19 @@ class WhisperService(private val context: Context) {
      * @return Float array normalized to [-1.0, 1.0]
      */
     private fun convertPcmToFloat(pcmData: ByteBuffer): FloatArray {
-        val shortBuffer = pcmData.asShortBuffer()
+        // AudioRecord writes PCM in little-endian byte order.
+        // ByteBuffer default is big-endian, so we MUST set LITTLE_ENDIAN
+        // before interpreting as ShortBuffer, or every sample's bytes will
+        // be swapped and Whisper will receive garbage /hallucinate non-speech.
+        val ordered = pcmData.duplicate().apply {
+            rewind()
+            order(java.nio.ByteOrder.LITTLE_ENDIAN)
+        }
+        val shortBuffer = ordered.asShortBuffer()
         val floatArray = FloatArray(shortBuffer.remaining())
 
         for (i in floatArray.indices) {
-            // Convert 16-bit PCM to float in range [-1.0, 1.0]
+            // Normalize 16-bit signed PCM → float [-1.0, 1.0]
             floatArray[i] = shortBuffer.get(i) / 32768.0f
         }
 
@@ -395,45 +420,16 @@ class WhisperService(private val context: Context) {
         return true
     }
 
-    // Native methods (to be implemented in C++)
-    // TODO(milestone-1): Implement these native methods in whisper_android.cpp
+    // Native methods
+    private external fun nativeInitialize(modelPath: String, useGPU: Boolean): Long
 
-    /**
-     * Initializes native Whisper context.
-     * 
-     * @param modelPath Path to the model file
-     * @param useGPU Whether to use GPU acceleration
-     * @return Native context pointer or 0 if failed
-     */
-    // private external fun nativeInitialize(modelPath: String, useGPU: Boolean): Long
+    private external fun nativeTranscribe(
+        contextPtr: Long,
+        audioData: FloatArray,
+        language: String?,
+        threads: Int
+    ): TranscriptionResult?
 
-    /**
-     * Transcribes audio using native Whisper.
-     * 
-     * @param contextPtr Native context pointer
-     * @param audioData Audio data as float array
-     * @param language Language code or null for auto-detect
-     * @param threads Number of threads to use
-     * @return Transcription result or null
-     */
-    // private external fun nativeTranscribe(
-    //     contextPtr: Long,
-    //     audioData: FloatArray,
-    //     language: String?,
-    //     threads: Int
-    // ): TranscriptionResult?
-
-    /**
-     * Releases native Whisper context.
-     * 
-     * @param contextPtr Native context pointer
-     */
-    // private external fun nativeRelease(contextPtr: Long)
-
-    /**
-     * Gets Whisper library version.
-     * 
-     * @return Version string
-     */
-    // private external fun nativeGetVersion(): String
+    private external fun nativeRelease(contextPtr: Long)
+    private external fun nativeGetVersion(): String
 }

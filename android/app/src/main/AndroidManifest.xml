@@ -65,11 +65,9 @@
 
     <application
         android:allowBackup="true"
-        android:icon="@mipmap/ic_launcher"
-        android:label="@string/app_name"
-        android:roundIcon="@mipmap/ic_launcher_round"
+        android:label="Limitless Companion"
         android:supportsRtl="true"
-        android:theme="@style/Theme.LimitlessCompanion"
+        android:theme="@android:style/Theme.DeviceDefault"
         android:usesCleartextTraffic="false"
         tools:targetApi="31">
 
@@ -81,7 +79,7 @@
             android:exported="true"
             android:launchMode="singleTop"
             android:screenOrientation="portrait"
-            android:theme="@style/Theme.LimitlessCompanion"
+            android:theme="@android:style/Theme.DeviceDefault"
             android:windowSoftInputMode="adjustResize">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
@@ -105,9 +103,14 @@
         <service
             android:name=".services.AudioCaptureService"
             android:enabled="true"
-            android:exported="false"
+            android:exported="true"
             android:foregroundServiceType="microphone"
-            android:stopWithTask="false" />
+            android:stopWithTask="false">
+            <intent-filter>
+                <action android:name="com.limitless.companion.ACTION_START_RECORDING" />
+                <action android:name="com.limitless.companion.ACTION_STOP_RECORDING" />
+            </intent-filter>
+        </service>
 
         <!-- ============================================ -->
         <!-- Content Providers -->

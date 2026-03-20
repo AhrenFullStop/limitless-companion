@@ -36,21 +36,21 @@ android {
             useSupportLibrary = true
         }
 
-        // TODO(milestone-1): Enable when whisper.cpp is integrated
-        // ndk {
-        //     abiFilters += listOf("arm64-v8a", "armeabi-v7a", "x86_64", "x86")
-        // }
+        // Enable when whisper.cpp is integrated
+        ndk {
+            abiFilters += listOf("arm64-v8a", "armeabi-v7a", "x86_64", "x86")
+        }
         
-        // TODO(milestone-1): Configure CMake
-        // externalNativeBuild {
-        //     cmake {
-        //         cppFlags += "-std=c++17"
-        //         arguments += listOf(
-        //             "-DANDROID_STL=c++_shared",
-        //             "-DANDROID_PLATFORM=android-26"
-        //         )
-        //     }
-        // }
+        // Configure CMake
+        externalNativeBuild {
+            cmake {
+                cppFlags += "-std=c++17 -fPIE -pie"
+                arguments += listOf(
+                    "-DANDROID_STL=c++_shared",
+                    "-DANDROID_PLATFORM=android-26"
+                )
+            }
+        }
     }
 
     buildTypes {
@@ -72,13 +72,13 @@ android {
         }
     }
 
-    // TODO(milestone-1): Enable when whisper.cpp is integrated
-    // externalNativeBuild {
-    //     cmake {
-    //         path = file("CMakeLists.txt")
-    //         version = "3.22.1"
-    //     }
-    // }
+    // Enable CMake
+    externalNativeBuild {
+        cmake {
+            path = file("src/main/cpp/CMakeLists.txt")
+            version = "3.22.1+"
+        }
+    }
 
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17

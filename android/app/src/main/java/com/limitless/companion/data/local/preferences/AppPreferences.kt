@@ -454,4 +454,19 @@ class AppPreferences(context: Context) {
     fun isConfigured(): Boolean {
         return getServerUrl().isNotEmpty() && hasApiKey()
     }
+
+    // ========================================
+    // Kotlin property accessors for UI convenience
+    // ========================================
+
+    @get:JvmName("getServerUrlProp")
+    @set:JvmName("setServerUrlProp")
+    var serverUrl: String?
+        get() = encryptedPrefs.getString(KEY_SERVER_URL, null)
+        set(value) { encryptedPrefs.edit().putString(KEY_SERVER_URL, value ?: "").apply() }
+
+    var useMicFallback: Boolean
+        get() = regularPrefs.getBoolean("use_mic_fallback", true)
+        set(value) { regularPrefs.edit().putBoolean("use_mic_fallback", value).apply() }
 }
+
